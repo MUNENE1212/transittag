@@ -1,0 +1,10 @@
+{
+  "route": "CBD → Westlands",
+  "stops": [
+    { "id": 1, "name": "CBD Ambassadeur",      "lat": -1.28330, "lon": 36.82190 },
+    { "id": 2, "name": "Archives",             "lat": -1.28390, "lon": 36.81760 },
+    { "id": 3, "name": "Museum Hill",          "lat": -1.27370, "lon": 36.81300 },
+    { "id": 4, "name": "Westlands Roundabout", "lat": -1.26730, "lon": 36.80620 },
+    { "id": 5, "name": "Sarit Centre",         "lat": -1.26010, "lon": 36.80300 }
+  ]
+}

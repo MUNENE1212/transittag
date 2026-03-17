@@ -17,13 +17,13 @@ add_executable(mqtt_dashboard
 target_include_directories(mqtt_dashboard PRIVATE src)
 
 if(CURL_LIB)
-    message(STATUS "libcurl found — InfluxDB support enabled")
-    target_sources(mqtt_dashboard PRIVATE src/influxdb.c)
+    message(STATUS "libcurl found — InfluxDB + distance pricing support enabled")
+    target_sources(mqtt_dashboard PRIVATE src/influxdb.c src/routes.c)
     target_link_libraries(mqtt_dashboard ${MOSQUITTO_LIB} ${WEBSOCKETS_LIB} ${CURL_LIB})
     target_compile_definitions(mqtt_dashboard PRIVATE HAS_INFLUXDB=1)
 else()
-    message(STATUS "libcurl NOT found — InfluxDB support disabled (install libcurl4-openssl-dev)")
-    target_sources(mqtt_dashboard PRIVATE src/influxdb_stub.c)
+    message(STATUS "libcurl NOT found — InfluxDB + distance pricing disabled (install libcurl4-openssl-dev)")
+    target_sources(mqtt_dashboard PRIVATE src/influxdb_stub.c src/routes_stub.c)
     target_link_libraries(mqtt_dashboard ${MOSQUITTO_LIB} ${WEBSOCKETS_LIB})
 endif()
 

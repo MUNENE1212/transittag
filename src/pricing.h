@@ -8,6 +8,8 @@
 #ifndef PRICING_H
 #define PRICING_H
 
+#include "routes.h"
+
 /* ── Configuration record ───────────────────────────────────────── */
 
 typedef struct {
@@ -18,6 +20,9 @@ typedef struct {
     int   peak1_end;           /* Hour (24h), default 9  */
     int   peak2_start;         /* Hour (24h), default 17 */
     int   peak2_end;           /* Hour (24h), default 19 */
+    int   distance_m;          /* Road distance to destination (metres), 0 = flat-rate */
+    int   dest_stop_id;        /* Destination stop ID, -1 if not set */
+    char  dest_stop_name[STOP_NAME_LEN]; /* Destination stop name */
 } pricing_config_t;
 
 /* ── API ────────────────────────────────────────────────────────── */
@@ -42,5 +47,14 @@ const char *pricing_get_route(void);
 
 /* Return a pointer to the full config (read-only, do not free). */
 pricing_config_t *pricing_get_config(void);
+
+/*
+ * Set distance-based pricing for the current passenger.
+ * Updates base_fare via routes_distance_to_base_fare().
+ */
+void pricing_set_distance(int stop_id, int distance_m, const char *stop_name);
+
+/* Return 1 if distance-based mode is active (distance_m > 0). */
+int  pricing_is_distance_mode(void);
 
 #endif /* PRICING_H */

@@ -5,6 +5,7 @@
  */
 
 #include "pricing.h"
+#include "routes.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -82,4 +83,22 @@ const char *pricing_get_route(void)
 pricing_config_t *pricing_get_config(void)
 {
     return &g_config;
+}
+
+/* ── Distance-based pricing ─────────────────────────────────────── */
+
+void pricing_set_distance(int stop_id, int distance_m, const char *stop_name)
+{
+    g_config.dest_stop_id = stop_id;
+    g_config.distance_m   = distance_m;
+    if (stop_name) {
+        strncpy(g_config.dest_stop_name, stop_name, STOP_NAME_LEN - 1);
+        g_config.dest_stop_name[STOP_NAME_LEN - 1] = '\0';
+    }
+    g_config.base_fare = routes_distance_to_base_fare(distance_m);
+}
+
+int pricing_is_distance_mode(void)
+{
+    return g_config.distance_m > 0;
 }

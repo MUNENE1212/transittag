@@ -1424,3 +1424,17 @@ input {
 
     .seat-hero-num { font-size: 3.5rem; }
 }
+
+/* ── Stop picker ── */
+.stop-list { display: flex; flex-direction: column; gap: 8px; }
+.stop-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 16px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; cursor: pointer; transition: border-color 0.15s;
+    font-size: 15px;
+}
+.stop-item:active { border-color: var(--blue); background: #0d1117; }
+.stop-item .stop-name { font-weight: 500; }
+.stop-item .stop-fare { color: var(--yellow); font-weight: 700; font-size: 16px; }
+.stop-loading { color: var(--muted); text-align: center; padding: 20px; }
+.fare-distance { font-size: 13px; color: var(--muted); margin-top: 4px; }

@@ -20,6 +20,7 @@
 #include "influxdb.h"
 #include "seat_manager.h"
 #include "pricing.h"
+#include "routes.h"
 
 /* ── Configuration ────────────────────────────────────────────── */
 
@@ -483,6 +484,57 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
 
         const char *resp = "{\"type\":\"auth_ok\"}";
         ws_send(wsi, resp, strlen(resp));
+
+    } else if (strcmp(action, "select_stop") == 0) {
+        int stop_id = cjson_get_int(cmd, "stop_id", -1);
+        int seat_id = cjson_get_int(cmd, "seat_id", -1);
+        if (stop_id >= 0) {
+            int dist = routes_get_distance_m(g_lat, g_lon, stop_id);
+            cJSON *resp = cJSON_CreateObject();
+            if (dist > 0) {
+                /* find stop name */
+                int sc = 0;
+                const route_stop_t *stops = routes_get_stops(&sc);
+                const char *sname = "Unknown";
+                for (int i = 0; i < sc; i++)
+                    if (stops[i].id == stop_id) { sname = stops[i].name; break; }
+
+                pricing_set_distance(stop_id, dist, sname);
+                int fare = pricing_get_fare();
+
+                cJSON_AddStringToObject(resp, "type", "fare_quote");
+                cJSON_AddNumberToObject(resp, "seat_id", seat_id);
+                cJSON_AddNumberToObject(resp, "stop_id", stop_id);
+                cJSON_AddStringToObject(resp, "stop_name", sname);
+                cJSON_AddNumberToObject(resp, "distance_m", dist);
+                cJSON_AddNumberToObject(resp, "base_fare", pricing_get_config()->base_fare);
+                cJSON_AddBoolToObject(resp,   "peak", pricing_is_peak());
+                cJSON_AddNumberToObject(resp, "effective_fare", fare);
+            } else {
+                cJSON_AddStringToObject(resp, "type", "fare_error");
+                cJSON_AddNumberToObject(resp, "seat_id", seat_id);
+                cJSON_AddStringToObject(resp, "reason", "distance_lookup_failed");
+            }
+            char *js = cJSON_PrintUnformatted(resp);
+            /* broadcast fare_quote; send fare_error only to requestor */
+            if (dist > 0) schedule_ws_broadcast(js, strlen(js));
+            else ws_send(wsi, js, strlen(js));
+            free(js);
+            cJSON_Delete(resp);
+
+            /* also broadcast updated seats_state with new fare */
+            if (dist > 0) {
+                char *ss = seats_state_to_json(pricing_get_fare(),
+                                               pricing_get_route(),
+                                               pricing_is_peak());
+                schedule_ws_broadcast(ss, strlen(ss));
+                free(ss);
+            }
+        }
+
+    } else if (strcmp(action, "get_stops") == 0) {
+        char *sj = routes_stops_to_json();
+        if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
     }
 }
 
@@ -565,6 +617,11 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
                 free(sj);
             }
         }
+        /* send route stops to new client */
+        {
+            char *sj = routes_stops_to_json();
+            if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
+        }
         break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
@@ -626,6 +683,52 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
         if (strstr(uri, "..")) {
             lws_return_http_status(wsi, HTTP_STATUS_FORBIDDEN, "Forbidden");
             return -1;
+        }
+
+        /* /api/fare?stop_id=N&lat=L&lon=O */
+        if (strncmp(uri, "/api/fare", 9) == 0) {
+            const char *p = strchr(uri, '?');
+            int stop_id = -1;
+            double qlat = g_lat, qlon = g_lon;
+            if (p) {
+                const char *sp = strstr(p, "stop_id=");
+                if (sp) stop_id = atoi(sp + 8);
+            }
+            cJSON *jr = cJSON_CreateObject();
+            if (stop_id >= 0) {
+                int dist = routes_get_distance_m(qlat, qlon, stop_id);
+                int sc2 = 0;
+                const route_stop_t *stops2 = routes_get_stops(&sc2);
+                const char *sname2 = "Unknown";
+                for (int i = 0; i < sc2; i++)
+                    if (stops2[i].id == stop_id) { sname2 = stops2[i].name; break; }
+                int bfare = routes_distance_to_base_fare(dist > 0 ? dist : 0);
+                int efare = pricing_is_peak() ? (int)(bfare * 1.5) : bfare;
+                cJSON_AddNumberToObject(jr, "stop_id",        stop_id);
+                cJSON_AddStringToObject(jr, "stop_name",      sname2);
+                cJSON_AddNumberToObject(jr, "distance_m",     dist > 0 ? dist : 0);
+                cJSON_AddNumberToObject(jr, "base_fare",      bfare);
+                cJSON_AddBoolToObject(jr,   "peak",           pricing_is_peak());
+                cJSON_AddNumberToObject(jr, "effective_fare", efare);
+                cJSON_AddNumberToObject(jr, "peak_multiplier", pricing_is_peak() ? 1.5 : 1.0);
+            } else {
+                cJSON_AddStringToObject(jr, "error", "missing stop_id");
+            }
+            char *jrstr = cJSON_PrintUnformatted(jr);
+            cJSON_Delete(jr);
+            /* Write JSON to a temp file and serve it */
+            char tmppath[64];
+            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_fare_%d.json", (int)getpid());
+            FILE *ftmp = fopen(tmppath, "w");
+            if (ftmp) {
+                fputs(jrstr, ftmp);
+                fclose(ftmp);
+            }
+            free(jrstr);
+            int n = lws_serve_http_file(wsi, tmppath,
+                                        "application/json", NULL, 0);
+            if (n < 0) return -1;
+            break;
         }
 
         snprintf(path, sizeof(path), "%s%s", WWW_DIR, uri);
@@ -704,6 +807,7 @@ int main(int argc, char *argv[])
     /* ── Seat manager + pricing ── */
     seat_manager_init(14);
     pricing_init();
+    routes_init();
     printf("[Seats] Initialised 14 seats, base fare KES %d, route: %s\n",
            pricing_get_fare(), pricing_get_route());
 
@@ -806,6 +910,7 @@ int main(int argc, char *argv[])
     mosquitto_destroy(g_mosq);
     mosquitto_lib_cleanup();
     influx_cleanup();
+    routes_cleanup();
     for (int i = 0; i < MAX_LOG_MSGS; i++)
         free(msg_log[i].json);
     free(pending_broadcast);

@@ -30,7 +30,10 @@
         pinTarget:     null,    /* 'conductor' | 'owner' */
         summary:       {},
         connected:     false,
-        authed:        false    /* Whether PIN has been accepted for this session */
+        authed:        false,   /* Whether PIN has been accepted for this session */
+        stops:         [],
+        destStopId:    null,
+        distanceM:     0
     };
 
     /* ── Seat model ─────────────────────────────────────────────── */
@@ -152,6 +155,12 @@
             if (state.role === "owner" && msg.payload) {
                 updateOwnerVehicle(msg.payload);
             }
+        } else if (t === "stops_list") {
+            handleStopsList(msg);
+        } else if (t === "fare_quote") {
+            handleFareQuote(msg);
+        } else if (t === "fare_error") {
+            handleFareError(msg);
         } else {
             /* Legacy MQTT envelope: { topic, payload, receivedAt } */
             if (msg.topic) {
@@ -312,8 +321,9 @@
             hideCard("pax-waiting-card");
             hideCard("pax-receipt-card");
             hideCard("pax-no-seat");
-            /* Request current seats */
+            /* Request current seats and route stops */
             sendCommand({ action: "get_seats" });
+            sendCommand({ action: "get_stops" });
         } else if (role === "conductor" || role === "owner") {
             state.pinTarget = role;
             state.pinBuffer = "";
@@ -1195,6 +1205,94 @@
         document.addEventListener("DOMContentLoaded", init);
     } else {
         init();
+    }
+
+    /* ── Stop picker ────────────────────────────────────────────── */
+
+    function handleStopsList(msg) {
+        state.stops = msg.stops || [];
+        renderStopPicker();
+    }
+
+    function renderStopPicker() {
+        var list = document.getElementById("pax-stop-list");
+        if (!list) return;
+        list.innerHTML = "";
+        if (!state.stops.length) {
+            list.innerHTML = '<div class="stop-loading">No stops configured</div>';
+            return;
+        }
+        state.stops.forEach(function(stop) {
+            var item = document.createElement("div");
+            item.className = "stop-item";
+            var dist = estimateKm(state.stops[0], stop);
+            var fare = distToFare(dist * 1000);
+            item.innerHTML =
+                '<span class="stop-name">' + escapeHtml(stop.name) + '</span>' +
+                '<span class="stop-fare">KES ' + fare + '</span>';
+            item.addEventListener("click", function() { selectStop(stop.id); });
+            list.appendChild(item);
+        });
+        /* show stop card if passenger has a seat but no destination yet */
+        if (state.mySeatId !== null && !state.destStopId) {
+            document.getElementById("pax-stop-card").removeAttribute("hidden");
+        }
+    }
+
+    function selectStop(stopId) {
+        sendCommand({ action: "select_stop", stop_id: stopId, seat_id: state.mySeatId });
+        showToast("Getting fare...", "info");
+    }
+
+    function handleFareQuote(msg) {
+        state.destStopId = msg.stop_id;
+        state.distanceM  = msg.distance_m;
+        state.fare       = msg.effective_fare;
+        /* hide stop picker, show fare with distance */
+        var sc = document.getElementById("pax-stop-card");
+        if (sc) sc.setAttribute("hidden", "");
+        var fd = document.getElementById("pax-distance");
+        if (fd) {
+            fd.textContent = (msg.distance_m / 1000).toFixed(1) + " km road distance";
+            fd.removeAttribute("hidden");
+        }
+        /* update fare display */
+        var el = document.getElementById("pax-amount");
+        if (el) el.textContent = "KES " + msg.effective_fare;
+        var routeEl = document.getElementById("pax-route");
+        if (routeEl && msg.stop_name) routeEl.textContent += " \u2192 " + msg.stop_name;
+        showToast("Fare: KES " + msg.effective_fare, "success");
+    }
+
+    function handleFareError(msg) {
+        void msg;
+        showToast("Could not calculate fare \u2014 using flat rate", "error");
+    }
+
+    /* Rough straight-line km estimate for fare preview before API responds */
+    function estimateKm(from, to) {
+        if (!from || !to) return 0;
+        var dlat = (to.lat - from.lat) * 111;
+        var dlon = (to.lon - from.lon) * 111 * Math.cos(from.lat * Math.PI / 180);
+        return Math.sqrt(dlat*dlat + dlon*dlon);
+    }
+
+    /* Client-side fare tier mirror (matches routes_distance_to_base_fare in C) */
+    function distToFare(dist_m) {
+        if (dist_m <  2000) return 30;
+        if (dist_m <  5000) return 50;
+        if (dist_m < 10000) return 70;
+        if (dist_m < 20000) return 100;
+        return 130;
+    }
+
+    /* Simple HTML entity escaping */
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
     }
 
 })();
