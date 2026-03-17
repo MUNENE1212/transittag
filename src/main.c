@@ -18,6 +18,8 @@
 #include <libwebsockets.h>
 #include "cJSON.h"
 #include "influxdb.h"
+#include "seat_manager.h"
+#include "pricing.h"
 
 /* ── Configuration ────────────────────────────────────────────── */
 
@@ -63,6 +65,13 @@ static int ws_client_count = 0;
 static char *pending_broadcast = NULL;
 static size_t pending_broadcast_len = 0;
 
+/* Last known vehicle telemetry (cached from heartbeat) */
+static double g_lat     = 0.0;
+static double g_lon     = 0.0;
+static double g_speed   = 0.0;
+static int    g_battery = 0;
+static int    g_gsm     = 0;
+
 static void store_log_entry(const char *json, size_t len);
 static void schedule_ws_broadcast(const char *json, size_t len);
 
@@ -81,6 +90,7 @@ static const char *get_topic_type(const char *topic)
     if (strstr(topic, "/wifi/"))      return "wifi";
     if (strstr(topic, "/rfid/"))      return "rfid";
     if (strstr(topic, "/login/"))     return "login";
+    if (strstr(topic, "/seat/"))      return "seat";
     return "unknown";
 }
 
@@ -168,6 +178,13 @@ static void on_message(struct mosquitto *mosq, void *userdata,
         const char *imei = cjson_get_string(payload_json, "imei", NULL);
 
         if (strcmp(ttype, "heartbeat") == 0) {
+            /* Cache latest vehicle telemetry for owner dashboard */
+            g_lat     = cjson_get_double(payload_json, "latitude",  g_lat);
+            g_lon     = cjson_get_double(payload_json, "longitude", g_lon);
+            g_speed   = cjson_get_double(payload_json, "speed",     g_speed);
+            g_battery = cjson_get_int(payload_json,    "battery",   g_battery);
+            g_gsm     = cjson_get_int(payload_json,    "gsm",       g_gsm);
+
             influx_write_heartbeat(imei,
                 cjson_get_double(payload_json, "battery", 0),
                 cjson_get_int(payload_json, "gsm", 0),
@@ -178,6 +195,41 @@ static void on_message(struct mosquitto *mosq, void *userdata,
                 cjson_get_string(payload_json, "acc", "OFF"),
                 cjson_get_bool(payload_json, "move", 0),
                 cjson_get_bool(payload_json, "alarm", 0));
+        } else if (strcmp(ttype, "seat") == 0) {
+            /*
+             * Seat sensor update from the IoT device.
+             * Expected payload: {"seats":[{"id":1,"weight":12.3},…]}
+             * or a single seat: {"id":1,"weight":12.3}
+             */
+            cJSON *seats_arr = cJSON_GetObjectItem(payload_json, "seats");
+            if (seats_arr && cJSON_IsArray(seats_arr)) {
+                cJSON *item = NULL;
+                cJSON_ArrayForEach(item, seats_arr) {
+                    int    sid    = cjson_get_int(item, "id", 0);
+                    double weight = cjson_get_double(item, "weight", 0.0);
+                    if (sid > 0) {
+                        seat_set_weight(sid, weight, pricing_get_fare());
+                    }
+                }
+            } else {
+                /* Single-seat payload */
+                int    sid    = cjson_get_int(payload_json, "id", 0);
+                double weight = cjson_get_double(payload_json, "weight", 0.0);
+                if (sid > 0) {
+                    seat_set_weight(sid, weight, pricing_get_fare());
+                }
+            }
+            /* Broadcast updated seat state to all connected clients */
+            {
+                char *sj = seats_state_to_json(
+                    pricing_get_fare(),
+                    pricing_get_route(),
+                    pricing_is_peak());
+                if (sj) {
+                    schedule_ws_broadcast(sj, strlen(sj));
+                    free(sj);
+                }
+            }
         } else if (strcmp(ttype, "wifi") == 0) {
             cJSON *cfg = cJSON_GetObjectItem(payload_json, "config");
             const char *ssid = cfg ? cjson_get_string(cfg, "ssid", "unknown") : "unknown";
@@ -276,6 +328,164 @@ static void broadcast_sub_list(void)
     cJSON_Delete(resp);
 }
 
+/* ── PWA WebSocket command handler ──────────────────────────────── */
+/*
+ * Handles actions from the TransitTag PWA (seat management, payments,
+ * fare configuration).  Called by handle_ws_command for unrecognised
+ * action strings.
+ */
+static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
+{
+    const char *action = cjson_get_string(cmd, "action", "");
+
+    if (strcmp(action, "get_seats") == 0) {
+        /* Send current seat state to requesting client only */
+        char *json = seats_state_to_json(
+            pricing_get_fare(),
+            pricing_get_route(),
+            pricing_is_peak());
+        if (json) {
+            ws_send(wsi, json, strlen(json));
+            free(json);
+        }
+
+    } else if (strcmp(action, "pay_self") == 0 ||
+               strcmp(action, "pay_push_them") == 0) {
+        /*
+         * Both flows initiate an STK Push; the difference is who entered
+         * the phone number.  The server triggers the same M-Pesa call.
+         * For now: transition seat to PAYING and broadcast the update.
+         */
+        int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        const char *phone = cjson_get_string(cmd, "phone",
+                            cjson_get_string(cmd, "their_phone", ""));
+        if (seat_id > 0) {
+            seat_set_paying(seat_id, phone);
+            seat_t *s = seat_get(seat_id);
+            if (s) {
+                char *sj = seat_to_json(s);
+                if (sj) {
+                    /* Build seat_update message */
+                    size_t msglen = strlen(sj) + 32;
+                    char  *msg   = malloc(msglen);
+                    if (msg) {
+                        snprintf(msg, msglen,
+                            "{\"type\":\"seat_update\",\"seat\":%s}", sj);
+                        schedule_ws_broadcast(msg, strlen(msg));
+                        free(msg);
+                    }
+                    free(sj);
+                }
+            }
+        }
+
+    } else if (strcmp(action, "pay_for_seat") == 0) {
+        /* Third-party payment: payer_phone is different from seat occupant */
+        int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        const char *payer = cjson_get_string(cmd, "payer_phone", "");
+        if (seat_id > 0) {
+            seat_set_paying(seat_id, payer);
+            seat_t *s = seat_get(seat_id);
+            if (s) {
+                /* Store payer phone in the seat record */
+                strncpy(s->payer_phone, payer, sizeof(s->payer_phone) - 1);
+                char *sj = seat_to_json(s);
+                if (sj) {
+                    size_t msglen = strlen(sj) + 32;
+                    char  *msg   = malloc(msglen);
+                    if (msg) {
+                        snprintf(msg, msglen,
+                            "{\"type\":\"seat_update\",\"seat\":%s}", sj);
+                        schedule_ws_broadcast(msg, strlen(msg));
+                        free(msg);
+                    }
+                    free(sj);
+                }
+            }
+        }
+
+    } else if (strcmp(action, "cash_paid") == 0) {
+        int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        if (seat_id > 0) {
+            seat_set_paid_cash(seat_id);
+            seat_t *s = seat_get(seat_id);
+            if (s) {
+                char *sj = seat_to_json(s);
+                if (sj) {
+                    size_t msglen = strlen(sj) + 32;
+                    char  *msg   = malloc(msglen);
+                    if (msg) {
+                        snprintf(msg, msglen,
+                            "{\"type\":\"seat_update\",\"seat\":%s}", sj);
+                        schedule_ws_broadcast(msg, strlen(msg));
+                        free(msg);
+                    }
+                    free(sj);
+                }
+            }
+        }
+
+    } else if (strcmp(action, "reset_seat") == 0) {
+        int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        if (seat_id > 0) {
+            seat_reset(seat_id);
+            seat_t *s = seat_get(seat_id);
+            if (s) {
+                char *sj = seat_to_json(s);
+                if (sj) {
+                    size_t msglen = strlen(sj) + 32;
+                    char  *msg   = malloc(msglen);
+                    if (msg) {
+                        snprintf(msg, msglen,
+                            "{\"type\":\"seat_update\",\"seat\":%s}", sj);
+                        schedule_ws_broadcast(msg, strlen(msg));
+                        free(msg);
+                    }
+                    free(sj);
+                }
+            }
+        }
+
+    } else if (strcmp(action, "set_fare") == 0) {
+        const char *route = cjson_get_string(cmd, "route", NULL);
+        int         fare  = cjson_get_int(cmd, "fare", 0);
+        pricing_set(route, fare);
+        /* Broadcast updated seats_state so all PWA clients refresh */
+        char *json = seats_state_to_json(
+            pricing_get_fare(),
+            pricing_get_route(),
+            pricing_is_peak());
+        if (json) {
+            schedule_ws_broadcast(json, strlen(json));
+            free(json);
+        }
+
+    } else if (strcmp(action, "get_summary") == 0) {
+        day_summary_t ds  = seat_get_day_summary();
+        char *json = day_summary_to_json(&ds,
+            g_lat, g_lon, g_speed, g_battery, g_gsm);
+        if (json) {
+            ws_send(wsi, json, strlen(json));
+            free(json);
+        }
+
+    } else if (strcmp(action, "auth") == 0) {
+        /*
+         * PIN authentication.  For now we accept any PIN from a connected
+         * client and rely on the local JS check.  A production deployment
+         * would validate against a server-side PIN store.
+         * Respond with auth_ok to allow the client to enter the role.
+         */
+        const char *role = cjson_get_string(cmd, "role", "");
+        const char *pin  = cjson_get_string(cmd, "pin",  "");
+        printf("[WS] auth attempt: role=%s pin=****\n", role);
+        (void)pin; /* Audit log would go here */
+
+        const char *resp = "{\"type\":\"auth_ok\"}";
+        ws_send(wsi, resp, strlen(resp));
+    }
+}
+
 /* Handle incoming WebSocket command from browser */
 static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
 {
@@ -322,6 +532,9 @@ static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
         }
     } else if (strcmp(action, "list_subscriptions") == 0) {
         send_sub_list(wsi);
+    } else {
+        /* Dispatch to PWA seat/fare/payment command handler */
+        handle_ws_pwa_command(wsi, cmd);
     }
 
     cJSON_Delete(cmd);
@@ -341,6 +554,17 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         }
         send_backlog(wsi);
         send_sub_list(wsi);
+        /* Send current seat state so PWA clients populate immediately */
+        {
+            char *sj = seats_state_to_json(
+                pricing_get_fare(),
+                pricing_get_route(),
+                pricing_is_peak());
+            if (sj) {
+                ws_send(wsi, sj, strlen(sj));
+                free(sj);
+            }
+        }
         break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
@@ -477,6 +701,12 @@ int main(int argc, char *argv[])
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    /* ── Seat manager + pricing ── */
+    seat_manager_init(14);
+    pricing_init();
+    printf("[Seats] Initialised 14 seats, base fare KES %d, route: %s\n",
+           pricing_get_fare(), pricing_get_route());
+
     /* ── Default subscription ── */
     strncpy(active_subs[0], "/topic/transittag/#", MAX_TOPIC_LEN - 1);
     sub_count = 1;
@@ -547,6 +777,12 @@ int main(int argc, char *argv[])
     printf("[HTTP] Dashboard: http://localhost:%d\n", HTTP_PORT);
 
     /* ── Event loop ── */
+    /*
+     * timeout_ticks: increments every lws_service call (~50 ms each).
+     * 200 ticks ≈ 10 seconds — used to trigger seat_check_timeouts().
+     */
+    int timeout_ticks = 0;
+
     while (running) {
         rc = mosquitto_loop(g_mosq, 0, 1);
         if (rc != MOSQ_ERR_SUCCESS) {
@@ -555,6 +791,12 @@ int main(int argc, char *argv[])
             mosquitto_reconnect(g_mosq);
         }
         lws_service(g_lws_ctx, 50);
+
+        /* Check seat payment timeouts every ~10 seconds */
+        if (++timeout_ticks >= 200) {
+            timeout_ticks = 0;
+            seat_check_timeouts();
+        }
     }
 
     /* ── Cleanup ── */

@@ -9,6 +9,9 @@ mqtt_client
 # Notes (contains device IMEI, broker details)
 NOTES.md
 
+# IP filing document (confidential, contains ownership details)
+IP_FILING_DOCUMENT.md
+
 # Editor / OS
 *.swp
 *.swo

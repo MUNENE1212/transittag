@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>TransitTag</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/pwa/pwa.css">
+</head>
+<body>
+
+    <!-- ── Fixed header ─────────────────────────────────────────── -->
+    <header id="app-header">
+        <button id="btn-back" class="hdr-btn hdr-back" aria-label="Back" hidden>&#8592;</button>
+        <span id="hdr-title">TransitTag</span>
+        <div id="conn-banner" class="conn-banner conn-disconnected" title="WebSocket status">
+            <span id="conn-dot" class="conn-dot"></span>
+            <span id="conn-label">CONN</span>
+        </div>
+    </header>
+
+    <!-- ── SCREEN: Loading ──────────────────────────────────────── -->
+    <div id="s-loading" class="screen screen-active">
+        <div class="loading-center">
+            <div class="spinner"></div>
+            <p class="loading-brand">TransitTag</p>
+            <p class="loading-sub">Smart fare · Matatu</p>
+        </div>
+    </div>
+
+    <!-- ── SCREEN: Landing / Role Selection ─────────────────────── -->
+    <div id="s-landing" class="screen" hidden>
+        <div class="landing-hero">
+            <p class="landing-tagline">Who are you on this matatu?</p>
+        </div>
+        <div class="role-list">
+            <button class="role-card" data-role="passenger">
+                <span class="role-icon">&#128100;</span>
+                <div class="role-text">
+                    <span class="role-name">Passenger</span>
+                    <span class="role-desc">View your seat &amp; pay fare</span>
+                </div>
+                <span class="role-arrow">&#8250;</span>
+            </button>
+            <button class="role-card" data-role="conductor">
+                <span class="role-icon">&#127981;</span>
+                <div class="role-text">
+                    <span class="role-name">Conductor</span>
+                    <span class="role-desc">Manage seats &amp; collect fares</span>
+                </div>
+                <span class="role-arrow">&#8250;</span>
+            </button>
+            <button class="role-card" data-role="owner">
+                <span class="role-icon">&#128200;</span>
+                <div class="role-text">
+                    <span class="role-name">Owner / SACCO</span>
+                    <span class="role-desc">Revenue dashboard &amp; vehicle stats</span>
+                </div>
+                <span class="role-arrow">&#8250;</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ── SCREEN: PIN Entry ─────────────────────────────────────── -->
+    <div id="s-pin" class="screen" hidden>
+        <div class="pin-container">
+            <p class="pin-title">Enter PIN</p>
+            <p id="pin-subtitle" class="pin-subtitle">Conductor access</p>
+            <div id="pin-dots" class="pin-dots">
+                <span class="pin-dot" data-idx="0"></span>
+                <span class="pin-dot" data-idx="1"></span>
+                <span class="pin-dot" data-idx="2"></span>
+                <span class="pin-dot" data-idx="3"></span>
+            </div>
+            <p id="pin-error" class="pin-error" hidden>Incorrect PIN. Try again.</p>
+            <div class="pin-pad">
+                <button class="pin-key" data-key="1">1</button>
+                <button class="pin-key" data-key="2">2</button>
+                <button class="pin-key" data-key="3">3</button>
+                <button class="pin-key" data-key="4">4</button>
+                <button class="pin-key" data-key="5">5</button>
+                <button class="pin-key" data-key="6">6</button>
+                <button class="pin-key" data-key="7">7</button>
+                <button class="pin-key" data-key="8">8</button>
+                <button class="pin-key" data-key="9">9</button>
+                <button class="pin-key pin-key-del" data-key="del">&#9003;</button>
+                <button class="pin-key" data-key="0">0</button>
+                <button class="pin-key pin-key-ok" data-key="ok">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── SCREEN: Passenger ─────────────────────────────────────── -->
+    <div id="s-passenger" class="screen" hidden>
+
+        <!-- Seat hero -->
+        <div id="pax-hero" class="seat-hero seat-hero-empty">
+            <div class="seat-hero-inner">
+                <span id="pax-seat-num" class="seat-hero-num">?</span>
+                <span id="pax-seat-status" class="seat-hero-status">Scanning seats...</span>
+            </div>
+        </div>
+
+        <!-- Fare card -->
+        <div id="pax-fare-card" class="card" hidden>
+            <div class="fare-row">
+                <div>
+                    <p class="fare-label">Route</p>
+                    <p id="pax-route" class="fare-route">CBD &#8594; Westlands</p>
+                </div>
+                <div class="fare-amount-wrap">
+                    <p class="fare-label">Fare</p>
+                    <p id="pax-amount" class="fare-amount">KES 50</p>
+                </div>
+                <span id="pax-peak-badge" class="peak-badge" hidden>PEAK</span>
+            </div>
+        </div>
+
+        <!-- Payment options -->
+        <div id="pax-payment-card" class="card" hidden>
+            <p class="card-heading">Pay fare</p>
+            <button id="btn-pay-self" class="pay-btn pay-btn-mpesa">
+                <span class="pay-icon">&#128242;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Pay via M-Pesa</span>
+                    <span class="pay-sub">STK Push to your phone</span>
+                </span>
+            </button>
+            <button id="btn-pay-push-them" class="pay-btn pay-btn-mpesa-alt">
+                <span class="pay-icon">&#128232;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Send M-Pesa request to my phone</span>
+                    <span class="pay-sub">Enter your number, STK Push fires to you</span>
+                </span>
+            </button>
+            <button id="btn-pay-for-neighbour" class="pay-btn pay-btn-neighbour">
+                <span class="pay-icon">&#129309;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Pay for a neighbour&#39;s seat</span>
+                    <span class="pay-sub">Pay from your M-Pesa for another seat</span>
+                </span>
+            </button>
+            <button id="btn-pay-cash" class="pay-btn pay-btn-cash">
+                <span class="pay-icon">&#128181;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Pay cash to conductor</span>
+                    <span class="pay-sub">Hand notes to the conductor directly</span>
+                </span>
+            </button>
+        </div>
+
+        <!-- Phone input card (contextual — shown for push/neighbour flows) -->
+        <div id="pax-phone-card" class="card" hidden>
+            <p id="pax-phone-title" class="card-heading">Enter phone number</p>
+            <p id="pax-phone-desc" class="card-desc">07xx xxx xxx</p>
+            <div class="phone-row">
+                <span class="phone-prefix">+254</span>
+                <input id="pax-phone-input" class="phone-input" type="tel"
+                       inputmode="numeric" maxlength="9" placeholder="712345678">
+            </div>
+            <button id="btn-phone-confirm" class="pay-btn pay-btn-mpesa mt-8">
+                <span class="pay-icon">&#9989;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Confirm &amp; Send</span>
+                </span>
+            </button>
+            <button id="btn-phone-cancel" class="pay-btn pay-btn-cancel mt-4">Cancel</button>
+        </div>
+
+        <!-- Waiting / pending card -->
+        <div id="pax-waiting-card" class="card" hidden>
+            <div class="waiting-row">
+                <div class="spinner spinner-sm"></div>
+                <p id="pax-waiting-msg" class="waiting-msg">Waiting for M-Pesa confirmation...</p>
+            </div>
+        </div>
+
+        <!-- Receipt card -->
+        <div id="pax-receipt-card" class="card card-receipt" hidden>
+            <p class="receipt-heading">&#9989; Payment confirmed</p>
+            <div class="receipt-grid">
+                <span class="receipt-label">Receipt</span>
+                <span id="rcpt-id" class="receipt-val receipt-mono">—</span>
+                <span class="receipt-label">Amount</span>
+                <span id="rcpt-amount" class="receipt-val">—</span>
+                <span class="receipt-label">Method</span>
+                <span id="rcpt-method" class="receipt-val">—</span>
+                <span class="receipt-label">Phone</span>
+                <span id="rcpt-phone" class="receipt-val">—</span>
+            </div>
+        </div>
+
+        <!-- No seat placeholder -->
+        <div id="pax-no-seat" class="card card-info" hidden>
+            <p class="info-icon">&#128188;</p>
+            <p class="info-title">Please take a seat</p>
+            <p class="info-desc">Your seat will appear here once the conductor assigns it or you sit down on a sensor-equipped seat.</p>
+        </div>
+
+    </div>
+
+    <!-- ── SCREEN: Conductor ─────────────────────────────────────── -->
+    <div id="s-conductor" class="screen" hidden>
+
+        <!-- Summary bar -->
+        <div id="cond-summary" class="summary-bar">
+            <div class="summary-item">
+                <span id="cond-paid" class="summary-val">0</span>
+                <span class="summary-label">Paid</span>
+            </div>
+            <div class="summary-item">
+                <span id="cond-seated" class="summary-val">0</span>
+                <span class="summary-label">Seated</span>
+            </div>
+            <div class="summary-item summary-item-money">
+                <span id="cond-revenue" class="summary-val">0</span>
+                <span class="summary-label">KES Today</span>
+            </div>
+            <div class="summary-item summary-item-alert">
+                <span id="cond-unpaid" class="summary-val">0</span>
+                <span class="summary-label">Unpaid</span>
+            </div>
+        </div>
+
+        <!-- Route + fare control -->
+        <div class="card fare-control-card">
+            <div class="fare-control-row">
+                <input id="cond-route-input" class="fare-route-input" type="text"
+                       placeholder="Route (e.g. CBD → Westlands)" value="CBD → Westlands">
+                <input id="cond-fare-input" class="fare-num-input" type="number"
+                       min="10" max="999" value="50">
+                <button id="btn-set-fare" class="btn-set-fare">Set</button>
+            </div>
+            <div class="peak-row">
+                <span id="cond-peak-indicator" class="peak-indicator peak-off">OFF-PEAK</span>
+                <span class="peak-row-label">Peak multiplier applies automatically</span>
+            </div>
+        </div>
+
+        <!-- Seat grid -->
+        <div class="card">
+            <p class="card-heading">Seat Map</p>
+            <div id="cond-seat-grid" class="seat-grid">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <!-- Evasion alerts -->
+        <div class="card" id="cond-evasion-card">
+            <p class="card-heading">&#9888; Evasion Alerts</p>
+            <div id="cond-evasion-list" class="evasion-list">
+                <p class="muted-text">No alerts right now.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── SCREEN: Owner / SACCO ─────────────────────────────────── -->
+    <div id="s-owner" class="screen" hidden>
+
+        <!-- Revenue hero -->
+        <div class="revenue-hero">
+            <div class="rev-hero-inner">
+                <p class="rev-label">Today&#39;s Revenue</p>
+                <p id="own-revenue" class="rev-amount">KES 0</p>
+                <div class="rev-sub-row">
+                    <span id="own-trips" class="rev-sub-item">0 trips</span>
+                    <span class="rev-sep">&#183;</span>
+                    <span id="own-pax" class="rev-sub-item">0 passengers</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payment split -->
+        <div class="card">
+            <p class="card-heading">Payment Split</p>
+            <div class="split-item">
+                <div class="split-label-row">
+                    <span class="split-name split-mpesa">M-Pesa</span>
+                    <span id="own-mpesa-pct" class="split-pct">0%</span>
+                </div>
+                <div class="split-track">
+                    <div id="own-mpesa-bar" class="split-fill split-fill-mpesa" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="split-item">
+                <div class="split-label-row">
+                    <span class="split-name split-cash">Cash</span>
+                    <span id="own-cash-pct" class="split-pct">0%</span>
+                </div>
+                <div class="split-track">
+                    <div id="own-cash-bar" class="split-fill split-fill-cash" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="split-item">
+                <div class="split-label-row">
+                    <span class="split-name split-evaded">Evaded</span>
+                    <span id="own-evaded-pct" class="split-pct">0%</span>
+                </div>
+                <div class="split-track">
+                    <div id="own-evaded-bar" class="split-fill split-fill-evaded" style="width:0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vehicle status grid -->
+        <div class="card">
+            <p class="card-heading">Vehicle Status</p>
+            <div class="veh-grid">
+                <div class="veh-item">
+                    <span class="veh-icon">&#128205;</span>
+                    <div class="veh-info">
+                        <span class="veh-label">GPS</span>
+                        <span id="own-gps" class="veh-val">—</span>
+                    </div>
+                </div>
+                <div class="veh-item">
+                    <span class="veh-icon">&#128663;</span>
+                    <div class="veh-info">
+                        <span class="veh-label">Speed</span>
+                        <span id="own-speed" class="veh-val">— km/h</span>
+                    </div>
+                </div>
+                <div class="veh-item">
+                    <span class="veh-icon">&#128267;</span>
+                    <div class="veh-info">
+                        <span class="veh-label">Battery</span>
+                        <span id="own-battery" class="veh-val">—</span>
+                    </div>
+                </div>
+                <div class="veh-item">
+                    <span class="veh-icon">&#128246;</span>
+                    <div class="veh-info">
+                        <span class="veh-label">GSM Signal</span>
+                        <span id="own-gsm" class="veh-val">—</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent trips -->
+        <div class="card">
+            <p class="card-heading">Recent Trips</p>
+            <div id="own-trips-list" class="trips-list">
+                <p class="muted-text">No trip data yet.</p>
+            </div>
+        </div>
+
+        <!-- Fare evasion stats -->
+        <div class="card card-evasion">
+            <p class="card-heading">Fare Evasion</p>
+            <div class="evasion-stats">
+                <div class="evasion-stat">
+                    <span id="own-evaders-count" class="evasion-num">0</span>
+                    <span class="evasion-stat-label">Evaders</span>
+                </div>
+                <div class="evasion-stat">
+                    <span id="own-evasion-loss" class="evasion-num evasion-loss">KES 0</span>
+                    <span class="evasion-stat-label">Loss</span>
+                </div>
+                <div class="evasion-stat">
+                    <span id="own-evasion-rate" class="evasion-num">0%</span>
+                    <span class="evasion-stat-label">Rate</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Conductor Action Sheet (bottom sheet) ─────────────────── -->
+    <div id="overlay" class="overlay" hidden></div>
+    <div id="action-sheet" class="action-sheet" hidden>
+        <div class="action-sheet-handle"></div>
+        <p id="action-sheet-title" class="action-sheet-title">Seat 1</p>
+
+        <div class="card mt-8">
+            <p class="card-heading">Enter passenger phone</p>
+            <div class="phone-row">
+                <span class="phone-prefix">+254</span>
+                <input id="as-phone-input" class="phone-input" type="tel"
+                       inputmode="numeric" maxlength="9" placeholder="712345678">
+            </div>
+        </div>
+
+        <div class="action-btns">
+            <button id="as-btn-pay-self" class="pay-btn pay-btn-mpesa">
+                <span class="pay-icon">&#128242;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Send M-Pesa STK Push</span>
+                    <span class="pay-sub">Push to passenger&#39;s own phone</span>
+                </span>
+            </button>
+            <button id="as-btn-push-them" class="pay-btn pay-btn-mpesa-alt">
+                <span class="pay-icon">&#128232;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Neighbour pushes to their phone</span>
+                    <span class="pay-sub">Conductor helps neighbour send to seated person</span>
+                </span>
+            </button>
+            <button id="as-btn-pay-for" class="pay-btn pay-btn-neighbour">
+                <span class="pay-icon">&#129309;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Neighbour pays for this seat</span>
+                    <span class="pay-sub">Third party pays from their M-Pesa</span>
+                </span>
+            </button>
+            <button id="as-btn-cash" class="pay-btn pay-btn-cash">
+                <span class="pay-icon">&#128181;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Mark as CASH PAID</span>
+                </span>
+            </button>
+            <button id="as-btn-reset" class="pay-btn pay-btn-danger">
+                <span class="pay-icon">&#10006;</span>
+                <span class="pay-text">
+                    <span class="pay-main">Reset seat</span>
+                </span>
+            </button>
+        </div>
+
+        <button id="as-btn-close" class="btn-close-sheet">Close</button>
+    </div>
+
+    <!-- ── Toast notification ────────────────────────────────────── -->
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="/pwa/pwa.js"></script>
+</body>
+</html>

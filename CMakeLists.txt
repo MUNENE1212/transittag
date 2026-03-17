@@ -10,6 +10,8 @@ find_library(CURL_LIB curl)
 add_executable(mqtt_dashboard
     src/main.c
     src/cJSON.c
+    src/seat_manager.c
+    src/pricing.c
 )
 
 target_include_directories(mqtt_dashboard PRIVATE src)
