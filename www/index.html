@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TransitTag IoT Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>TransitTag Dashboard</h1>
+            <span class="subtitle">MQTT IoT Monitor</span>
+        </div>
+        <div class="header-right">
+            <span id="mqtt-status" class="status-indicator disconnected">
+                <span class="status-dot"></span>
+                <span>MQTT</span>
+            </span>
+            <span id="conn-status" class="status-indicator disconnected">
+                <span class="status-dot"></span>
+                <span id="conn-text">WS</span>
+            </span>
+        </div>
+    </header>
+
+    <main>
+        <section class="panel" id="topic-panel">
+            <h2>MQTT Subscriptions</h2>
+            <div class="topic-controls">
+                <div class="topic-input-row">
+                    <input type="text" id="topic-input" placeholder="/topic/transittag/#"
+                           value="/topic/transittag/#">
+                    <button id="btn-subscribe" class="btn-accent">Subscribe</button>
+                </div>
+                <div class="topic-presets">
+                    <button class="preset" data-topic="/topic/transittag/#">All TransitTag</button>
+                    <button class="preset" data-topic="/topic/transittag/heartbeat/#">Heartbeat</button>
+                    <button class="preset" data-topic="/topic/transittag/wifi/#">WiFi</button>
+                    <button class="preset" data-topic="/topic/transittag/rfid/#">RFID</button>
+                    <button class="preset" data-topic="/topic/transittag/login/#">Login</button>
+                    <button class="preset" data-topic="/topic/#">All Topics</button>
+                </div>
+            </div>
+            <div id="active-subs" class="active-subs"></div>
+        </section>
+
+        <section class="panel" id="device-panel">
+            <h2>Device Info</h2>
+            <div class="device-grid">
+                <div class="device-field">
+                    <label>IMEI</label>
+                    <span id="dev-imei" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Status</label>
+                    <span id="dev-status" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Last Seen</label>
+                    <span id="dev-lastseen" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Topic Type</label>
+                    <span id="dev-topic-type" class="mono">&mdash;</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" id="wifi-panel">
+            <h2>WiFi Access Point</h2>
+            <div class="device-grid">
+                <div class="device-field">
+                    <label>SSID</label>
+                    <span id="dev-ssid" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Channel</label>
+                    <span id="dev-channel" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>MAC Address</label>
+                    <span id="dev-mac" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Clients</label>
+                    <span id="dev-clients-num" class="mono">&mdash;</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" id="heartbeat-panel">
+            <h2>Heartbeat / GPS</h2>
+            <div class="device-grid">
+                <div class="device-field">
+                    <label>Battery</label>
+                    <span id="dev-battery" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>GSM Signal</label>
+                    <span id="dev-gsm" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>GPS</label>
+                    <span id="dev-gps" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Speed</label>
+                    <span id="dev-speed" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Satellites</label>
+                    <span id="dev-sats" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>ACC (Ignition)</label>
+                    <span id="dev-acc" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Movement</label>
+                    <span id="dev-movement" class="mono">&mdash;</span>
+                </div>
+                <div class="device-field">
+                    <label>Alarm</label>
+                    <span id="dev-alarm" class="mono">&mdash;</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" id="clients-panel">
+            <h2>Connected Clients <span id="client-count" class="badge">0</span></h2>
+            <div class="table-wrap">
+                <table id="clients-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>MAC Address</th>
+                            <th>IP Address</th>
+                            <th>Device Name</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clients-body">
+                        <tr class="empty-row"><td colspan="4">No clients connected</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" id="rfid-panel">
+            <h2>RFID Scans</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>User ID</th>
+                            <th>Station</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rfid-body">
+                        <tr class="empty-row"><td colspan="4">No RFID scans</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" id="log-panel">
+            <h2>Message Log</h2>
+            <div id="log-container">
+                <div id="log-entries"></div>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

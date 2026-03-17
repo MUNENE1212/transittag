@@ -1,0 +1,35 @@
+services:
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?Set INFLUX_ADMIN_PASSWORD in .env}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-transittag}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-iot_data}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?Set INFLUX_TOKEN in .env}
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      INFLUX_TOKEN: ${INFLUX_TOKEN:?Set INFLUX_TOKEN in .env}
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  grafana-data:

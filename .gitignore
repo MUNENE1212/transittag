@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+mqtt_client
+
+# Secrets & environment
+.env
+.secrets
+
+# Notes (contains device IMEI, broker details)
+NOTES.md
+
+# Editor / OS
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Docker volumes
+influxdb-data/
+grafana-data/

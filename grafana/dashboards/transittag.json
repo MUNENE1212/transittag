@@ -1,0 +1,212 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "title": "Battery Level",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2, "spanNulls": true },
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "orange", "value": 20 },
+              { "color": "green", "value": 50 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"heartbeat\" and r._field == \"battery\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "GSM Signal Strength",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2, "spanNulls": true },
+          "unit": "none",
+          "min": 0, "max": 31,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "orange", "value": 10 },
+              { "color": "green", "value": 20 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"heartbeat\" and r._field == \"gsm\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "Vehicle Speed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 10, "lineWidth": 2, "spanNulls": true },
+          "unit": "velocitykmh",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"heartbeat\" and r._field == \"speed\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "Satellite Count (GPS Fix Quality)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2, "spanNulls": true },
+          "unit": "none",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "orange", "value": 4 },
+              { "color": "green", "value": 8 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"heartbeat\" and r._field == \"satellites\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "GPS Track",
+      "type": "geomap",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 16 },
+      "options": {
+        "view": { "id": "coords", "lat": -1.29, "lon": 36.82, "zoom": 12 },
+        "basemap": { "type": "default" },
+        "layers": [
+          {
+            "type": "markers",
+            "config": {
+              "showLegend": true,
+              "style": { "size": { "fixed": 6 }, "color": { "fixed": "#0ea5e9" } }
+            }
+          }
+        ]
+      },
+      "fieldConfig": { "defaults": {} },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "import \"experimental/geo\"\n\nfrom(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"heartbeat\")\n  |> filter(fn: (r) => r._field == \"latitude\" or r._field == \"longitude\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.latitude != 0.0 and r.longitude != 0.0)"
+        }
+      ]
+    },
+    {
+      "title": "WiFi Client Count (Passenger Occupancy)",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#8b5cf6", "mode": "fixed" },
+          "custom": { "fillOpacity": 30, "lineWidth": 2, "drawStyle": "bars", "spanNulls": true },
+          "unit": "none",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wifi\" and r._field == \"clients\")\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "Device Online Events",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#16a34a", "mode": "fixed" },
+          "custom": { "fillOpacity": 50, "lineWidth": 0, "drawStyle": "bars" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"login\" and r._field == \"online\")\n  |> aggregateWindow(every: v.windowPeriod, fn: count, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "title": "RFID Scans Per Hour",
+      "type": "barchart",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#d97706", "mode": "fixed" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "" },
+          "query": "from(bucket: \"iot_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"rfid\" and r._field == \"status\")\n  |> aggregateWindow(every: 1h, fn: count, createEmpty: false)"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["iot", "transittag", "mqtt"],
+  "templating": {
+    "list": [
+      {
+        "name": "imei",
+        "type": "query",
+        "datasource": { "type": "influxdb", "uid": "" },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"iot_data\", tag: \"imei\")",
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "TransitTag Fleet Monitor",
+  "uid": "transittag-main",
+  "version": 1
+}

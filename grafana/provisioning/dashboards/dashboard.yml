@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: TransitTag
+    orgId: 1
+    folder: TransitTag IoT
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
