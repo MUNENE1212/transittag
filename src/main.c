@@ -537,36 +537,6 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         char *sj = routes_stops_to_json();
         if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
 
-    } else if (strcmp(action, "verify_receipt") == 0) {
-        const char *receipt = cjson_get_string(cmd, "receipt", "");
-        /* Search all seats for matching receipt */
-        int found_seat = -1;
-        int sc = 0;
-        seat_t *all = seat_get_all(&sc);
-        for (int i = 0; i < sc; i++) {
-            if (strcmp(all[i].receipt, receipt) == 0) {
-                found_seat = all[i].id;
-                break;
-            }
-        }
-        cJSON *vr = cJSON_CreateObject();
-        cJSON_AddStringToObject(vr, "type", "receipt_verify");
-        cJSON_AddStringToObject(vr, "receipt", receipt);
-        if (found_seat > 0) {
-            cJSON_AddStringToObject(vr, "result", "valid");
-            cJSON_AddNumberToObject(vr, "seat_id", found_seat);
-            seat_t *s = seat_get(found_seat);
-            if (s) {
-                cJSON_AddNumberToObject(vr, "amount", s->fare_kes);
-                cJSON_AddStringToObject(vr, "method", s->payment_method);
-            }
-        } else {
-            cJSON_AddStringToObject(vr, "result", "invalid");
-        }
-        char *vjs = cJSON_PrintUnformatted(vr);
-        ws_send(wsi, vjs, strlen(vjs));   /* only to scanning conductor */
-        free(vjs);
-        cJSON_Delete(vr);
     }
 }
 

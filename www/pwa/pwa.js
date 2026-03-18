@@ -169,13 +169,6 @@
             handleFareQuote(msg);
         } else if (t === "fare_error") {
             handleFareError(msg);
-        } else if (t === "receipt_verify") {
-            hideCameraOverlay();
-            if (msg.result === "valid") {
-                showToast("\u2705 VERIFIED \u2014 Seat " + msg.seat_id + " \u00b7 KES " + msg.amount, "success");
-            } else {
-                showToast("\u274c INVALID receipt", "error");
-            }
         } else {
             /* Legacy MQTT envelope: { topic, payload, receivedAt } */
             if (msg.topic) {
@@ -819,72 +812,6 @@
         state.activeSeatId = null;
     }
 
-    /* ── Conductor: QR camera scan ──────────────────────────────── */
-
-    var cameraStream    = null;
-    var cameraScanTimer = null;
-
-    function startCameraScan() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            showToast("Camera not supported on this device", "error");
-            return;
-        }
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-            .then(function (stream) {
-                cameraStream = stream;
-                var video = document.getElementById("camera-video");
-                if (video) {
-                    video.srcObject = stream;
-                }
-                showEl("camera-overlay");
-                cameraScanTimer = setInterval(scanCameraFrame, 100);
-            })
-            .catch(function (err) {
-                console.warn("[QR] Camera access denied:", err);
-                showToast("Camera access denied", "error");
-            });
-    }
-
-    function scanCameraFrame() {
-        var video  = document.getElementById("camera-video");
-        var canvas = document.getElementById("camera-canvas");
-        if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-        var ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        if (typeof jsQR === "undefined") return;
-
-        var code = jsQR(imageData.data, imageData.width, imageData.height);
-        if (code && code.data) {
-            stopCameraStream();
-            hideEl("camera-overlay");
-            showToast("Verifying...", "info");
-            sendCommand({ action: "verify_receipt", receipt: code.data });
-        }
-    }
-
-    function stopCameraStream() {
-        if (cameraScanTimer) {
-            clearInterval(cameraScanTimer);
-            cameraScanTimer = null;
-        }
-        if (cameraStream) {
-            cameraStream.getTracks().forEach(function (t) { t.stop(); });
-            cameraStream = null;
-        }
-        var video = document.getElementById("camera-video");
-        if (video) video.srcObject = null;
-    }
-
-    function hideCameraOverlay() {
-        stopCameraStream();
-        hideEl("camera-overlay");
-    }
-
     /* ── Owner dashboard ────────────────────────────────────────── */
 
     function updateOwnerDashboard(msg) {
@@ -1165,21 +1092,6 @@
         var overlay = document.getElementById("overlay");
         if (overlay) overlay.addEventListener("click", hideActionSheet);
 
-        /* Conductor: Scan QR button */
-        var scanQrBtn = document.getElementById("btn-scan-qr");
-        if (scanQrBtn) {
-            scanQrBtn.addEventListener("click", function () {
-                startCameraScan();
-            });
-        }
-
-        /* Camera overlay: Cancel button */
-        var cameraCancelBtn = document.getElementById("btn-camera-cancel");
-        if (cameraCancelBtn) {
-            cameraCancelBtn.addEventListener("click", function () {
-                hideCameraOverlay();
-            });
-        }
     }
 
     function bindPassengerPayButtons() {
