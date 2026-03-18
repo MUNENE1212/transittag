@@ -42,6 +42,7 @@ typedef struct {
     int            fare_kes;     /* Fare amount at time of seating */
     char           receipt[32];  /* TT-XXXXXX receipt code */
     char           payment_method[20]; /* "mpesa" | "cash" | "neighbour" */
+    int            dest_stop_id; /* Destination stop ID, 0 if not set */
 } seat_t;
 
 /* ── Day summary (for conductor + owner dashboards) ─────────────── */

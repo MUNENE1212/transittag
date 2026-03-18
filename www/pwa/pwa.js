@@ -18,7 +18,7 @@
     /* ── Application state ──────────────────────────────────────── */
 
     var state = {
-        role:          null,    /* 'passenger' | 'conductor' | 'owner' */
+        role:          null,    /* 'passenger' | 'conductor' | 'owner' | 'driver' */
         seats:         [],      /* Array of seat objects (cached) */
         mySeatId:      null,    /* Passenger's own seat id */
         fare:          50,
@@ -33,7 +33,12 @@
         authed:        false,   /* Whether PIN has been accepted for this session */
         stops:         [],
         destStopId:    null,
-        distanceM:     0
+        distanceM:     0,
+        dropoffs:      [],      /* array of {id, name, count, seats} */
+        editStops:     [],      /* working copy for stop manager */
+        vehicleSpeed:  0,
+        gpsLat:        0,
+        gpsLon:        0
     };
 
     /* ── Seat-from-URL helper ───────────────────────────────────── */
@@ -91,6 +96,10 @@
             }
             if (state.role === "conductor" || state.role === "owner") {
                 sendCommand({ action: "get_summary" });
+            }
+            if (state.role === "driver") {
+                sendCommand({ action: "get_dropoffs" });
+                sendCommand({ action: "get_stops" });
             }
         };
 
@@ -160,11 +169,22 @@
             /* Dashboard compatibility — ignore in PWA */
         } else if (t === "heartbeat") {
             /* Use GPS/battery data for owner view even from MQTT heartbeats */
-            if (state.role === "owner" && msg.payload) {
-                updateOwnerVehicle(msg.payload);
+            if (msg.payload) {
+                var hb = msg.payload;
+                if (hb.latitude  !== undefined) state.gpsLat = hb.latitude;
+                if (hb.longitude !== undefined) state.gpsLon = hb.longitude;
+                if (hb.speed     !== undefined) {
+                    state.vehicleSpeed = hb.speed;
+                    setEl("drv-speed", hb.speed + " km/h");
+                }
+                if (state.role === "owner") {
+                    updateOwnerVehicle(hb);
+                }
             }
         } else if (t === "stops_list") {
             handleStopsList(msg);
+        } else if (t === "dropoffs") {
+            handleDropoffs(msg);
         } else if (t === "fare_quote") {
             handleFareQuote(msg);
         } else if (t === "fare_error") {
@@ -193,6 +213,10 @@
             renderSeatGrid(state.seats);
             updateConductorSummary(state.seats);
             updateConductorFareDisplay();
+        }
+        if (state.role === "driver") {
+            /* Update route name in driver view when route changes */
+            setEl("drv-route-name", state.route || "\u2014");
         }
     }
 
@@ -289,7 +313,8 @@
         "s-pin":       "PIN Entry",
         "s-passenger": "My Seat",
         "s-conductor": "Conductor",
-        "s-owner":     "Owner Dashboard"
+        "s-owner":     "Owner Dashboard",
+        "s-driver":    "Driver View"
     };
 
     function showScreen(id) {
@@ -341,6 +366,12 @@
 
             /* Request current seats and route stops */
             sendCommand({ action: "get_seats" });
+            sendCommand({ action: "get_stops" });
+        } else if (role === "driver") {
+            state.role = "driver";
+            showScreen("s-driver");
+            renderDriverView();
+            sendCommand({ action: "get_dropoffs" });
             sendCommand({ action: "get_stops" });
         } else if (role === "conductor" || role === "owner") {
             state.pinTarget = role;
@@ -1127,6 +1158,88 @@
         var overlay = document.getElementById("overlay");
         if (overlay) overlay.addEventListener("click", hideActionSheet);
 
+        /* Stop manager: toggle */
+        var toggleStopsBtn = document.getElementById("btn-toggle-stops");
+        if (toggleStopsBtn) {
+            toggleStopsBtn.addEventListener("click", function() {
+                var mgr = document.getElementById("stop-manager");
+                if (!mgr) return;
+                if (mgr.hidden) {
+                    /* Initialize editStops from current stops */
+                    state.editStops = state.stops.map(function(s) {
+                        return { id: s.id, name: s.name, lat: s.lat || 0, lon: s.lon || 0 };
+                    });
+                    mgr.hidden = false;
+                    renderStopManager();
+                    toggleStopsBtn.textContent = "Done";
+                } else {
+                    mgr.hidden = true;
+                    toggleStopsBtn.textContent = "Manage";
+                }
+            });
+        }
+
+        /* Stop manager: add stop */
+        var addStopBtn = document.getElementById("sm-btn-add-stop");
+        if (addStopBtn) {
+            addStopBtn.addEventListener("click", function() {
+                var nameInput = document.getElementById("sm-new-stop-name");
+                var latInput  = document.getElementById("sm-new-lat");
+                var lonInput  = document.getElementById("sm-new-lon");
+                var name = nameInput ? nameInput.value.trim() : "";
+                if (!name) { showToast("Enter a stop name", "error"); return; }
+                var lat = parseFloat(latInput ? latInput.value : "0") || 0;
+                var lon = parseFloat(lonInput ? lonInput.value : "0") || 0;
+                var newId = state.editStops.length > 0
+                    ? Math.max.apply(null, state.editStops.map(function(s) { return s.id || 0; })) + 1
+                    : 1;
+                state.editStops.push({ id: newId, name: name, lat: lat, lon: lon });
+                if (nameInput) nameInput.value = "";
+                if (latInput)  latInput.value  = "";
+                if (lonInput)  lonInput.value  = "";
+                renderStopManager();
+            });
+        }
+
+        /* Stop manager: capture GPS */
+        var captureGpsBtn = document.getElementById("sm-btn-capture-gps");
+        if (captureGpsBtn) {
+            captureGpsBtn.addEventListener("click", captureGps);
+        }
+
+        /* Stop manager: save */
+        var saveBtn = document.getElementById("sm-btn-save");
+        if (saveBtn) {
+            saveBtn.addEventListener("click", saveRoute);
+        }
+
+        /* Stop manager: delegated up/down/delete on sm-stop-list */
+        var smStopList = document.getElementById("sm-stop-list");
+        if (smStopList) {
+            smStopList.addEventListener("click", function(e) {
+                var btn = e.target.closest("[data-action]");
+                if (!btn) return;
+                var action = btn.getAttribute("data-action");
+                var idx    = parseInt(btn.getAttribute("data-idx"), 10);
+                if (isNaN(idx)) return;
+
+                if (action === "up" && idx > 0) {
+                    var tmp = state.editStops[idx - 1];
+                    state.editStops[idx - 1] = state.editStops[idx];
+                    state.editStops[idx]     = tmp;
+                    renderStopManager();
+                } else if (action === "down" && idx < state.editStops.length - 1) {
+                    var tmp2 = state.editStops[idx + 1];
+                    state.editStops[idx + 1] = state.editStops[idx];
+                    state.editStops[idx]     = tmp2;
+                    renderStopManager();
+                } else if (action === "del") {
+                    state.editStops.splice(idx, 1);
+                    renderStopManager();
+                }
+            });
+        }
+
     }
 
     function bindPassengerPayButtons() {
@@ -1276,10 +1389,155 @@
         init();
     }
 
+    /* ── Driver view ─────────────────────────────────────────────── */
+
+    function handleDropoffs(msg) {
+        state.dropoffs = msg.stops || [];
+        renderDriverView();
+    }
+
+    function renderDriverView() {
+        if (state.role !== "driver") return;
+
+        var stops = state.dropoffs;
+
+        /* Update route name */
+        setEl("drv-route-name", state.route || "\u2014");
+
+        /* Next stop hero */
+        if (stops.length > 0) {
+            var next = stops[0];
+            setEl("drv-next-name",  next.name);
+            setEl("drv-next-count", next.count + " passenger" + (next.count === 1 ? "" : "s"));
+            setEl("drv-next-seats", "Seats: " + (next.seats || []).join(", "));
+        } else {
+            setEl("drv-next-name",  "\u2014");
+            setEl("drv-next-count", "\u2014 passengers");
+            setEl("drv-next-seats", "");
+        }
+
+        /* All stops list */
+        var listEl = document.getElementById("drv-stops-list");
+        if (!listEl) return;
+        listEl.innerHTML = "";
+
+        if (stops.length === 0) {
+            listEl.innerHTML = '<div class="empty-state" style="color:var(--muted);text-align:center;padding:20px">No destinations selected yet</div>';
+            return;
+        }
+
+        stops.forEach(function(stop, idx) {
+            var row = document.createElement("div");
+            row.className = "drv-stop-row" + (idx === 0 ? " next" : "");
+
+            var left = document.createElement("div");
+            var nameDiv = document.createElement("div");
+            nameDiv.className = "drv-stop-name";
+            nameDiv.textContent = stop.name;
+            var seatsDiv = document.createElement("div");
+            seatsDiv.className = "drv-stop-seats";
+            seatsDiv.textContent = "Seats: " + (stop.seats || []).join(", ");
+            left.appendChild(nameDiv);
+            left.appendChild(seatsDiv);
+
+            var badge = document.createElement("span");
+            badge.className = "drv-stop-count";
+            badge.textContent = stop.count;
+
+            row.appendChild(left);
+            row.appendChild(badge);
+            listEl.appendChild(row);
+        });
+    }
+
+    /* ── Stop manager ─────────────────────────────────────────────── */
+
+    function renderStopManager() {
+        /* Populate route name input */
+        var routeInput = document.getElementById("sm-route-name");
+        if (routeInput) routeInput.value = state.route || "";
+
+        /* Render stop list */
+        var listEl = document.getElementById("sm-stop-list");
+        if (!listEl) return;
+        listEl.innerHTML = "";
+
+        state.editStops.forEach(function(stop, idx) {
+            var row = document.createElement("div");
+            row.className = "sm-stop-row";
+
+            var info = document.createElement("div");
+            info.style.flex = "1";
+            var nameSpan = document.createElement("div");
+            nameSpan.className = "sm-stop-name";
+            nameSpan.textContent = stop.name;
+            var coordSpan = document.createElement("div");
+            coordSpan.className = "sm-stop-coords";
+            if (stop.lat || stop.lon) {
+                coordSpan.textContent = stop.lat.toFixed(5) + ", " + stop.lon.toFixed(5);
+            }
+            info.appendChild(nameSpan);
+            info.appendChild(coordSpan);
+
+            var upBtn = document.createElement("button");
+            upBtn.className = "sm-order-btn";
+            upBtn.textContent = "\u2191";
+            upBtn.setAttribute("data-idx", idx);
+            upBtn.setAttribute("data-action", "up");
+
+            var downBtn = document.createElement("button");
+            downBtn.className = "sm-order-btn";
+            downBtn.textContent = "\u2193";
+            downBtn.setAttribute("data-idx", idx);
+            downBtn.setAttribute("data-action", "down");
+
+            var delBtn = document.createElement("button");
+            delBtn.className = "sm-del-btn";
+            delBtn.textContent = "\u00d7";
+            delBtn.setAttribute("data-idx", idx);
+            delBtn.setAttribute("data-action", "del");
+
+            row.appendChild(info);
+            row.appendChild(upBtn);
+            row.appendChild(downBtn);
+            row.appendChild(delBtn);
+            listEl.appendChild(row);
+        });
+    }
+
+    function saveRoute() {
+        var routeInput = document.getElementById("sm-route-name");
+        var routeName = routeInput ? routeInput.value.trim() : state.route;
+        if (!routeName) { showToast("Enter a route name", "error"); return; }
+        if (state.editStops.length === 0) { showToast("Add at least one stop", "error"); return; }
+
+        var stopsPayload = state.editStops.map(function(s, i) {
+            return { id: s.id || (i + 1), name: s.name, lat: s.lat || 0, lon: s.lon || 0 };
+        });
+
+        sendCommand({ action: "set_stops", route: routeName, stops: stopsPayload });
+        state.route = routeName;
+        showToast("Route saved", "success");
+    }
+
+    function captureGps() {
+        var lat = state.gpsLat || 0;
+        var lon = state.gpsLon || 0;
+        var latInput = document.getElementById("sm-new-lat");
+        var lonInput = document.getElementById("sm-new-lon");
+        if (latInput) latInput.value = lat;
+        if (lonInput) lonInput.value = lon;
+        showToast("GPS captured: " + lat.toFixed(5) + ", " + lon.toFixed(5), "info");
+    }
+
     /* ── Stop picker ────────────────────────────────────────────── */
 
     function handleStopsList(msg) {
         state.stops = msg.stops || [];
+        /* Keep editStops in sync so stop manager has latest data */
+        state.editStops = state.stops.map(function(s) {
+            return { id: s.id, name: s.name, lat: s.lat || 0, lon: s.lon || 0 };
+        });
         renderStopPicker();
     }
 

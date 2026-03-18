@@ -6,6 +6,7 @@
  */
 
 #include "routes.h"
+#include "seat_manager.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -20,6 +21,7 @@ static char           g_api_key[128]  = {0};
 static route_stop_t   g_stops[MAX_STOPS];
 static int            g_stop_count    = 0;
 static int            g_enabled       = 0;
+static char           g_route_name[128] = {0};
 
 /* Response accumulation buffer */
 static char   g_response_buf[8192];
@@ -86,6 +88,13 @@ int routes_init(void)
     if (!root) {
         printf("[Routes] Failed to parse stops.json\n");
         return -1;
+    }
+
+    /* Load route name if present */
+    cJSON *jroute = cJSON_GetObjectItem(root, "route");
+    if (jroute && jroute->valuestring) {
+        strncpy(g_route_name, jroute->valuestring, sizeof(g_route_name) - 1);
+        g_route_name[sizeof(g_route_name) - 1] = '\0';
     }
 
     cJSON *stops_arr = cJSON_GetObjectItem(root, "stops");
@@ -263,6 +272,131 @@ char *routes_stops_to_json(void)
         cJSON_AddNumberToObject(s, "lat",  g_stops[i].lat);
         cJSON_AddNumberToObject(s, "lon",  g_stops[i].lon);
         cJSON_AddItemToArray(arr, s);
+    }
+
+    char *js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return js;
+}
+
+/* ── Set stops at runtime ────────────────────────────────────── */
+
+int routes_set_stops(const char *route_name, const route_stop_t *stops, int count)
+{
+    if (!stops || count <= 0 || count > MAX_STOPS) return -1;
+
+    /* Update in-memory state */
+    if (route_name) {
+        strncpy(g_route_name, route_name, sizeof(g_route_name) - 1);
+        g_route_name[sizeof(g_route_name) - 1] = '\0';
+    }
+    memcpy(g_stops, stops, (size_t)count * sizeof(route_stop_t));
+    g_stop_count = count;
+
+    /* Persist to stops.json */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/stops.json", WWW_DIR);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return -1;
+
+    if (route_name)
+        cJSON_AddStringToObject(root, "route", route_name);
+
+    cJSON *arr = cJSON_AddArrayToObject(root, "stops");
+    for (int i = 0; i < count; i++) {
+        cJSON *s = cJSON_CreateObject();
+        cJSON_AddNumberToObject(s, "id",   stops[i].id);
+        cJSON_AddStringToObject(s, "name", stops[i].name);
+        cJSON_AddNumberToObject(s, "lat",  stops[i].lat);
+        cJSON_AddNumberToObject(s, "lon",  stops[i].lon);
+        cJSON_AddItemToArray(arr, s);
+    }
+
+    char *js = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (!js) return -1;
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        free(js);
+        return -1;
+    }
+    fputs(js, f);
+    fclose(f);
+    free(js);
+
+    printf("[Routes] Saved %d stops to %s (route: %s)\n",
+           count, path, route_name ? route_name : "");
+    return 0;
+}
+
+/* ── Route name getter ───────────────────────────────────────── */
+
+const char *routes_get_route_name(void)
+{
+    return g_route_name;
+}
+
+/* ── Drop-off summary JSON ───────────────────────────────────── */
+
+char *routes_dropoffs_to_json(void *seats_arr, int seat_count)
+{
+    seat_t *seats = (seat_t *)seats_arr;
+    if (!seats || seat_count <= 0) return NULL;
+
+    /* Count how many stops have passengers */
+    /* Use arrays indexed by stop position in g_stops */
+    int counts[MAX_STOPS] = {0};
+    /* seat_ids: up to MAX_SEATS per stop */
+    int seat_ids[MAX_STOPS][20];
+    memset(seat_ids, 0, sizeof(seat_ids));
+
+    for (int si = 0; si < seat_count; si++) {
+        seat_t *s = &seats[si];
+        /* Only include seated/paying/paid passengers */
+        if (s->status != SEAT_SEATED &&
+            s->status != SEAT_PAYING &&
+            s->status != SEAT_PAID_MPESA &&
+            s->status != SEAT_PAID_CASH &&
+            s->status != SEAT_PAID_NEIGHBOUR) {
+            continue;
+        }
+        if (s->dest_stop_id <= 0) continue;
+
+        /* Find stop index */
+        for (int gi = 0; gi < g_stop_count; gi++) {
+            if (g_stops[gi].id == s->dest_stop_id) {
+                if (counts[gi] < 20) {
+                    seat_ids[gi][counts[gi]] = s->id;
+                }
+                counts[gi]++;
+                break;
+            }
+        }
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+
+    cJSON_AddStringToObject(root, "type", "dropoffs");
+    cJSON *stops_json = cJSON_AddArrayToObject(root, "stops");
+
+    /* Add stops in route order (ascending by g_stops index) */
+    for (int gi = 0; gi < g_stop_count; gi++) {
+        if (counts[gi] == 0) continue;
+
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddNumberToObject(entry, "id",    g_stops[gi].id);
+        cJSON_AddStringToObject(entry, "name",  g_stops[gi].name);
+        cJSON_AddNumberToObject(entry, "count", counts[gi]);
+
+        cJSON *sarr = cJSON_AddArrayToObject(entry, "seats");
+        int actual = counts[gi] < 20 ? counts[gi] : 20;
+        for (int k = 0; k < actual; k++) {
+            cJSON_AddItemToArray(sarr, cJSON_CreateNumber(seat_ids[gi][k]));
+        }
+        cJSON_AddItemToArray(stops_json, entry);
     }
 
     char *js = cJSON_PrintUnformatted(root);

@@ -378,6 +378,12 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
                     }
                     free(sj);
                 }
+                /* Broadcast updated dropoffs */
+                {
+                    int sc2 = 0; seat_t *all2 = seat_get_all(&sc2);
+                    char *dj = routes_dropoffs_to_json(all2, sc2);
+                    if (dj) { schedule_ws_broadcast(dj, strlen(dj)); free(dj); }
+                }
             }
         }
 
@@ -403,6 +409,12 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
                     }
                     free(sj);
                 }
+                /* Broadcast updated dropoffs */
+                {
+                    int sc2 = 0; seat_t *all2 = seat_get_all(&sc2);
+                    char *dj = routes_dropoffs_to_json(all2, sc2);
+                    if (dj) { schedule_ws_broadcast(dj, strlen(dj)); free(dj); }
+                }
             }
         }
 
@@ -423,6 +435,12 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
                         free(msg);
                     }
                     free(sj);
+                }
+                /* Broadcast updated dropoffs */
+                {
+                    int sc2 = 0; seat_t *all2 = seat_get_all(&sc2);
+                    char *dj = routes_dropoffs_to_json(all2, sc2);
+                    if (dj) { schedule_ws_broadcast(dj, strlen(dj)); free(dj); }
                 }
             }
         }
@@ -490,6 +508,12 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         int stop_id = cjson_get_int(cmd, "stop_id", -1);
         int seat_id = cjson_get_int(cmd, "seat_id", -1);
         if (stop_id >= 0) {
+            /* Record the passenger's destination on the seat record */
+            if (seat_id > 0) {
+                seat_t *dest_seat = seat_get(seat_id);
+                if (dest_seat) dest_seat->dest_stop_id = stop_id;
+            }
+
             int dist = routes_get_distance_m(g_lat, g_lon, stop_id);
             cJSON *resp = cJSON_CreateObject();
             if (dist > 0) {
@@ -531,11 +555,50 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
                 schedule_ws_broadcast(ss, strlen(ss));
                 free(ss);
             }
+
+            /* Broadcast updated dropoffs now that a destination was set */
+            {
+                int sc2 = 0; seat_t *all2 = seat_get_all(&sc2);
+                char *dj = routes_dropoffs_to_json(all2, sc2);
+                if (dj) { schedule_ws_broadcast(dj, strlen(dj)); free(dj); }
+            }
         }
 
     } else if (strcmp(action, "get_stops") == 0) {
         char *sj = routes_stops_to_json();
         if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
+
+    } else if (strcmp(action, "set_stops") == 0) {
+        /* Payload: { action:"set_stops", route:"CBD → Westlands", stops:[{id,name,lat,lon},...] } */
+        const char *route_name = cjson_get_string(cmd, "route", "Unknown Route");
+        cJSON *stops_arr = cJSON_GetObjectItem(cmd, "stops");
+        if (stops_arr && cJSON_IsArray(stops_arr)) {
+            int n = cJSON_GetArraySize(stops_arr);
+            if (n > 0 && n <= MAX_STOPS) {
+                route_stop_t new_stops[MAX_STOPS];
+                for (int i = 0; i < n; i++) {
+                    cJSON *s = cJSON_GetArrayItem(stops_arr, i);
+                    new_stops[i].id  = cjson_get_int(s, "id", i + 1);
+                    snprintf(new_stops[i].name, STOP_NAME_LEN, "%s",
+                             cjson_get_string(s, "name", "Stop"));
+                    new_stops[i].lat = cjson_get_double(s, "lat", 0.0);
+                    new_stops[i].lon = cjson_get_double(s, "lon", 0.0);
+                }
+                if (routes_set_stops(route_name, new_stops, n) == 0) {
+                    /* Broadcast updated stops list to all clients */
+                    char *sj = routes_stops_to_json();
+                    if (sj) { schedule_ws_broadcast(sj, strlen(sj)); free(sj); }
+                    /* Also update pricing route name */
+                    pricing_set(route_name, pricing_get_config()->base_fare);
+                }
+            }
+        }
+
+    } else if (strcmp(action, "get_dropoffs") == 0) {
+        int sc = 0;
+        seat_t *all = seat_get_all(&sc);
+        char *dj = routes_dropoffs_to_json(all, sc);
+        if (dj) { ws_send(wsi, dj, strlen(dj)); free(dj); }
 
     }
 }
@@ -623,6 +686,12 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         {
             char *sj = routes_stops_to_json();
             if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
+        }
+        /* send current dropoffs to new client */
+        {
+            int sc2 = 0; seat_t *all2 = seat_get_all(&sc2);
+            char *dj = routes_dropoffs_to_json(all2, sc2);
+            if (dj) { ws_send(wsi, dj, strlen(dj)); free(dj); }
         }
         break;
 

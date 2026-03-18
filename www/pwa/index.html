@@ -61,6 +61,14 @@
                 </div>
                 <span class="role-arrow">&#8250;</span>
             </button>
+            <button class="role-card" data-role="driver">
+                <span class="role-icon">&#128652;</span>
+                <div class="role-text">
+                    <span class="role-name">Driver</span>
+                    <span class="role-desc">Upcoming drop-offs</span>
+                </div>
+                <span class="role-arrow">&#8250;</span>
+            </button>
         </div>
     </div>
 
@@ -264,6 +272,60 @@
             <div id="cond-evasion-list" class="evasion-list">
                 <p class="muted-text">No alerts right now.</p>
             </div>
+        </div>
+
+        <!-- Stop Management -->
+        <div class="card">
+            <div class="card-header-row">
+                <h3>Route Stops</h3>
+                <button id="btn-toggle-stops" class="btn-small">Manage</button>
+            </div>
+            <div id="stop-manager" hidden>
+                <div class="stop-manager-route-row">
+                    <input id="sm-route-name" type="text" class="route-input" placeholder="Route name (e.g. CBD &#8594; Westlands)">
+                </div>
+                <div id="sm-stop-list" class="sm-stop-list">
+                    <!-- Populated by JS -->
+                </div>
+                <div class="sm-add-row">
+                    <input id="sm-new-stop-name" type="text" class="sm-stop-input" placeholder="Stop name">
+                    <button id="sm-btn-capture-gps" class="btn-small btn-gps" title="Use vehicle&#39;s current GPS">&#128205;</button>
+                    <button id="sm-btn-add-stop" class="btn-small btn-add">Add</button>
+                </div>
+                <input id="sm-new-lat" type="hidden">
+                <input id="sm-new-lon" type="hidden">
+                <button id="sm-btn-save" class="pay-btn pay-btn-mpesa mt-8">
+                    <span class="pay-icon">&#128190;</span>
+                    <span class="pay-text"><span class="pay-main">Save Route</span></span>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── SCREEN: Driver ─────────────────────────────────────────── -->
+    <div id="s-driver" class="screen" hidden>
+
+        <!-- Next stop hero -->
+        <div id="drv-next-hero" class="drv-next-hero">
+            <div class="drv-next-label">NEXT DROP-OFF</div>
+            <div id="drv-next-name" class="drv-next-name">&#8212;</div>
+            <div id="drv-next-count" class="drv-next-count">&#8212; passengers</div>
+            <div id="drv-next-seats" class="drv-next-seats"></div>
+        </div>
+
+        <!-- All upcoming stops -->
+        <div class="card">
+            <h3>All Drop-offs</h3>
+            <div id="drv-stops-list" class="drv-stops-list">
+                <div class="empty-state">No destinations selected yet</div>
+            </div>
+        </div>
+
+        <!-- Route info -->
+        <div class="card drv-route-card">
+            <span id="drv-route-name" class="drv-route-name">&#8212;</span>
+            <span id="drv-speed" class="drv-speed">&#8212; km/h</span>
         </div>
 
     </div>

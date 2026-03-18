@@ -5,6 +5,8 @@
 
 #include "routes.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 int routes_init(void)
 {
@@ -32,6 +34,23 @@ int routes_distance_to_base_fare(int distance_m)
 
 char *routes_stops_to_json(void)
 {
+    return NULL;
+}
+
+int routes_set_stops(const char *route_name, const route_stop_t *stops, int count)
+{
+    (void)route_name; (void)stops; (void)count;
+    return -1;
+}
+
+const char *routes_get_route_name(void)
+{
+    return "";
+}
+
+char *routes_dropoffs_to_json(void *seats_arr, int seat_count)
+{
+    (void)seats_arr; (void)seat_count;
     return NULL;
 }
 
