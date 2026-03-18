@@ -799,6 +799,41 @@
                 (seat ? " \u2014 " + seatStatusLabel(seat.status) : "");
         }
 
+        var paid = seat && (seat.status === "paid_mpesa" ||
+                            seat.status === "paid_cash" ||
+                            seat.status === "paid_neighbour");
+
+        /* Toggle between payment info and payment action views */
+        var infoEl   = document.getElementById("as-payment-info");
+        var btnsEl   = document.getElementById("as-action-btns");
+        var phoneCard = document.querySelector("#action-sheet .card");
+        if (infoEl)    paid ? showEl("as-payment-info")   : hideEl("as-payment-info");
+        if (btnsEl)    paid ? hideEl("as-action-btns")    : showEl("as-action-btns");
+        if (phoneCard) paid ? (phoneCard.style.display = "none") : (phoneCard.style.display = "");
+
+        if (paid && seat) {
+            var methods = {
+                "paid_mpesa":      { label: "M-Pesa",              badge: "\u2705 PAID" },
+                "paid_cash":       { label: "Cash",                badge: "\u2705 PAID" },
+                "paid_neighbour":  { label: "Neighbour (M-Pesa)",  badge: "\u2705 PAID" }
+            };
+            var m = methods[seat.status] || { label: seat.status, badge: "\u2705" };
+            setEl("as-pi-badge",   m.badge);
+            setEl("as-pi-method",  m.label);
+            setEl("as-pi-receipt", seat.receipt || "\u2014");
+            setEl("as-pi-amount",  seat.fare_kes ? "KES " + seat.fare_kes : "\u2014");
+
+            /* Show payer phone — mask middle digits for privacy */
+            var phone = seat.payer_phone || seat.phone || "";
+            if (phone.length >= 9) {
+                phone = phone.slice(0, 3) + "XXXX" + phone.slice(-3);
+            }
+            setEl("as-pi-phone", phone || "\u2014");
+            var phoneRow = document.getElementById("as-pi-phone-row");
+            if (phoneRow) phoneRow.style.display = phone ? "" : "none";
+        }
+
+        /* Reset button always visible */
         var inputEl = document.getElementById("as-phone-input");
         if (inputEl) inputEl.value = (seat && seat.phone) ? seat.phone : "";
 

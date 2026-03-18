@@ -1442,3 +1442,27 @@ input {
 /* ── Receipt QR ──────────────────────────────────────────────────── */
 .receipt-qr { display: block; width: 160px; height: 160px; margin: 16px auto 0; border-radius: 8px; }
 
+/* ── Conductor payment verification panel ────────────────────────── */
+.payment-info-card {
+    background: #0d1a0d; border: 1px solid var(--green);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+}
+.payment-info-status {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.pi-badge {
+    background: var(--green); color: #000; font-weight: 700;
+    font-size: 13px; padding: 4px 10px; border-radius: 20px;
+}
+.pi-method {
+    font-size: 15px; font-weight: 600; color: var(--text);
+}
+.payment-info-rows { display: flex; flex-direction: column; gap: 8px; }
+.pi-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px;
+}
+.pi-label { color: var(--muted); }
+.pi-value { color: var(--text); font-weight: 500; }
+.pi-value.mono { font-family: monospace; letter-spacing: 0.5px; color: var(--green); }
+

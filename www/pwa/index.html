@@ -395,7 +395,29 @@
             </div>
         </div>
 
-        <div class="action-btns">
+        <!-- Payment verification panel — shown when seat is already paid -->
+        <div id="as-payment-info" class="payment-info-card" hidden>
+            <div class="payment-info-status">
+                <span id="as-pi-badge" class="pi-badge"></span>
+                <span id="as-pi-method" class="pi-method"></span>
+            </div>
+            <div class="payment-info-rows">
+                <div class="pi-row">
+                    <span class="pi-label">Receipt</span>
+                    <span id="as-pi-receipt" class="pi-value mono"></span>
+                </div>
+                <div class="pi-row">
+                    <span class="pi-label">Amount</span>
+                    <span id="as-pi-amount" class="pi-value"></span>
+                </div>
+                <div class="pi-row" id="as-pi-phone-row">
+                    <span class="pi-label">Phone</span>
+                    <span id="as-pi-phone" class="pi-value"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="action-btns" id="as-action-btns">
             <button id="as-btn-pay-self" class="pay-btn pay-btn-mpesa">
                 <span class="pay-icon">&#128242;</span>
                 <span class="pay-text">
@@ -423,13 +445,14 @@
                     <span class="pay-main">Mark as CASH PAID</span>
                 </span>
             </button>
-            <button id="as-btn-reset" class="pay-btn pay-btn-danger">
-                <span class="pay-icon">&#10006;</span>
-                <span class="pay-text">
-                    <span class="pay-main">Reset seat</span>
-                </span>
-            </button>
         </div>
+
+        <button id="as-btn-reset" class="pay-btn pay-btn-danger">
+            <span class="pay-icon">&#10006;</span>
+            <span class="pay-text">
+                <span class="pay-main">Reset seat</span>
+            </span>
+        </button>
 
         <button id="as-btn-close" class="btn-close-sheet">Close</button>
     </div>
