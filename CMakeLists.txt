@@ -3,6 +3,18 @@ project(mqtt_dashboard C)
 
 set(CMAKE_C_STANDARD 11)
 
+# Hardening flags — catch bugs at compile time and harden the binary
+add_compile_options(
+    -Wall -Wextra
+    -Wformat=2              # Catch format string misuse
+    -Wformat-security       # Error on dangerous printf patterns
+    -Wimplicit-fallthrough  # Require explicit fallthrough in switch
+    -fstack-protector-strong # Stack canaries on vulnerable functions
+    -D_FORTIFY_SOURCE=2     # Runtime bounds-checks on glibc string fns
+)
+# Link-time hardening (RELRO + immediate binding)
+add_link_options(-Wl,-z,relro,-z,now)
+
 find_library(MOSQUITTO_LIB mosquitto REQUIRED)
 find_library(WEBSOCKETS_LIB websockets REQUIRED)
 find_library(CURL_LIB curl)

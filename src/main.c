@@ -749,6 +749,42 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
     ws_auth_t *auth = (ws_auth_t *)user;
 
     switch (reason) {
+
+    /*
+     * Origin validation — reject WS upgrades from unexpected origins.
+     * This prevents cross-site WebSocket hijacking (CSWSH) attacks where
+     * a page on a different origin initiates a WS connection via a
+     * victim's browser while they are connected to the vehicle hotspot.
+     *
+     * We accept: no Origin header (native WS clients), and any http://
+     * origin on the same host (hotspot IP or hostname).  HTTPS origins
+     * will be added if/when TLS is deployed on the server.
+     */
+    case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION: {
+        char origin[256] = {0};
+        int olen = lws_hdr_copy(wsi, origin, sizeof(origin) - 1,
+                                WSI_TOKEN_ORIGIN);
+        if (olen > 0) {
+            /* Build expected origin from the Host header */
+            char host[128] = {0};
+            lws_hdr_copy(wsi, host, sizeof(host) - 1, WSI_TOKEN_HOST);
+            /* Accept http://<host> or https://<host> matching this server */
+            int ok = 0;
+            char expected_http[256], expected_https[256];
+            snprintf(expected_http,  sizeof(expected_http),  "http://%s",  host);
+            snprintf(expected_https, sizeof(expected_https), "https://%s", host);
+            if (strcmp(origin, expected_http)  == 0 ||
+                strcmp(origin, expected_https) == 0)
+                ok = 1;
+            if (!ok) {
+                printf("[WS] Rejected origin: '%s' (host: '%s')\n", origin, host);
+                return -1;
+            }
+        }
+        /* No Origin header — allow (native client or same-origin fetch) */
+        break;
+    }
+
     case LWS_CALLBACK_ESTABLISHED:
         if (auth) auth_init(auth);
         printf("[WS] Client connected (%d total)\n", ws_client_count + 1);
@@ -789,9 +825,22 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 
     case LWS_CALLBACK_RECEIVE:
         if (in && len > 0) {
+            /* Hard cap on frame size */
             if (len > MAX_WS_MSG_BYTES) {
                 printf("[WS] Oversized message (%zu bytes) — closing\n", len);
-                return -1;  /* Force disconnect */
+                return -1;
+            }
+            /* Per-session rate limiting: max RATE_MAX_MSGS per RATE_WINDOW_SEC */
+            if (auth) {
+                time_t now = time(NULL);
+                if (now - auth->rate_window_start >= RATE_WINDOW_SEC) {
+                    auth->rate_window_start = now;
+                    auth->rate_msg_count    = 0;
+                }
+                if (++auth->rate_msg_count > RATE_MAX_MSGS) {
+                    /* Silent drop — avoids giving attacker timing feedback */
+                    break;
+                }
             }
             handle_ws_command(wsi, auth, (const char *)in, len);
         }
@@ -877,13 +926,19 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
             if (decoded[0]) {
                 svg = qr_svg_generate(decoded, 4);
             }
+            /* Use mkstemps to avoid predictable temp file paths (symlink attack) */
             char tmppath[64];
-            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_qr_%d.svg", (int)getpid());
-            FILE *fsvg = fopen(tmppath, "w");
-            if (fsvg) {
-                if (svg) fputs(svg, fsvg);
-                else fputs("<svg xmlns=\"http://www.w3.org/2000/svg\"/>", fsvg);
-                fclose(fsvg);
+            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_qrXXXXXX.svg");
+            int tfd = mkstemps(tmppath, 4);  /* 4 = strlen(".svg") suffix */
+            if (tfd >= 0) {
+                FILE *fsvg = fdopen(tfd, "w");
+                if (fsvg) {
+                    if (svg) fputs(svg, fsvg);
+                    else fputs("<svg xmlns=\"http://www.w3.org/2000/svg\"/>", fsvg);
+                    fclose(fsvg);
+                } else {
+                    close(tfd);
+                }
             }
             free(svg);
             int n = lws_serve_http_file(wsi, tmppath, "image/svg+xml",
@@ -894,9 +949,11 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 
         /* /print-qrs — printable seat label page with QR codes for all 14 seats */
         if (strncmp(uri, "/print-qrs", 10) == 0) {
-            char tmppath[64];
-            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_print_%d.html", (int)getpid());
-            FILE *fhtml = fopen(tmppath, "w");
+            char tmppath[68];
+            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_printXXXXXX.html");
+            int ptfd = mkstemps(tmppath, 5);  /* 5 = strlen(".html") */
+            FILE *fhtml = (ptfd >= 0) ? fdopen(ptfd, "w") : NULL;
+            if (!fhtml && ptfd >= 0) close(ptfd);
             if (fhtml) {
                 fputs("<!DOCTYPE html>\n"
                       "<html>\n"
@@ -978,11 +1035,12 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
             }
             char *jrstr = cJSON_PrintUnformatted(jr);
             cJSON_Delete(jr);
-            /* Write JSON to a temp file and serve it */
-            char tmppath[64];
-            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_fare_%d.json",
-                     (int)getpid());
-            FILE *ftmp = fopen(tmppath, "w");
+            /* Write JSON to a temp file and serve it (mkstemp avoids symlink attack) */
+            char tmppath[68];
+            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_fareXXXXXX.json");
+            int jfd = mkstemps(tmppath, 5);   /* 5 = strlen(".json") */
+            FILE *ftmp = (jfd >= 0) ? fdopen(jfd, "w") : NULL;
+            if (!ftmp && jfd >= 0) close(jfd);
             if (ftmp) {
                 fputs(jrstr, ftmp);
                 fclose(ftmp);
@@ -1020,8 +1078,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 /* ── LWS setup ────────────────────────────────────────────────── */
 
 static struct lws_protocols protocols[] = {
-    { "http-only",    callback_http, 0,               0    },
-    { "dashboard-ws", callback_ws,  sizeof(ws_auth_t), 4096 },
+    { "http-only",    callback_http, 0,                0,    0, NULL, 0 },
+    { "dashboard-ws", callback_ws,  sizeof(ws_auth_t), 4096, 0, NULL, 0 },
     LWS_PROTOCOL_LIST_TERM
 };
 

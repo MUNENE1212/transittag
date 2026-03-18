@@ -252,6 +252,7 @@ const char *seat_status_str(seat_status_t s)
  * Append a JSON-safe escaped string.  Returns new pointer past written bytes.
  * Caller must ensure buf is large enough.
  */
+static char *json_str(char *buf, const char *s) __attribute__((unused));
 static char *json_str(char *buf, const char *s)
 {
     *buf++ = '"';

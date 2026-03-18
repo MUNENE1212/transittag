@@ -37,7 +37,14 @@ typedef struct {
     int        pin_attempts;              /* Consecutive failures         */
     time_t     locked_until;             /* Epoch; 0 = not locked        */
     time_t     last_attempt_time;        /* Rate-limit consecutive tries */
+    /* Rate limiting for WS message flood */
+    time_t     rate_window_start;        /* Start of current rate window */
+    int        rate_msg_count;           /* Messages in current window   */
 } ws_auth_t;
+
+/* Rate limiting: max 30 messages per 5-second window */
+#define RATE_WINDOW_SEC   5
+#define RATE_MAX_MSGS     30
 
 /* ── API ──────────────────────────────────────────────────────────── */
 
