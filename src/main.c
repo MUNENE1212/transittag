@@ -22,22 +22,8 @@
 #include "pricing.h"
 #include "routes.h"
 #include "qr_svg.h"
-
-/* ── Configuration ────────────────────────────────────────────── */
-
-#define BROKER_HOST  "byte-iot.net"
-#define BROKER_PORT  1883
-#define KEEP_ALIVE   60
-#define CLIENT_ID_PREFIX "inv_dash_"
-#define HTTP_PORT    8080
-#define MAX_WS_CLIENTS 32
-#define MAX_LOG_MSGS   100
-#define MAX_SUBSCRIPTIONS 16
-#define MAX_TOPIC_LEN 256
-
-#ifndef WWW_DIR
-#define WWW_DIR "./www"
-#endif
+#include "auth.h"
+#include "config.h"
 
 /* ── Globals ──────────────────────────────────────────────────── */
 
@@ -73,6 +59,10 @@ static double g_lon     = 0.0;
 static double g_speed   = 0.0;
 static int    g_battery = 0;
 static int    g_gsm     = 0;
+
+/* Security headers appended to every HTTP file response */
+static const char g_sec_headers[] = HTTP_SECURITY_HEADERS;
+static const int  g_sec_headers_len = sizeof(HTTP_SECURITY_HEADERS) - 1;
 
 static void store_log_entry(const char *json, size_t len);
 static void schedule_ws_broadcast(const char *json, size_t len);
@@ -335,13 +325,56 @@ static void broadcast_sub_list(void)
  * Handles actions from the TransitTag PWA (seat management, payments,
  * fare configuration).  Called by handle_ws_command for unrecognised
  * action strings.
+ *
+ * Role enforcement:
+ *   Passenger / Driver  — get_seats, select_stop, get_stops, get_dropoffs,
+ *                         pay_self, pay_push_them, pay_for_seat
+ *   Conductor+          — cash_paid, reset_seat, set_fare, get_summary
+ *   Owner+              — set_stops
  */
-static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
+static void handle_ws_pwa_command(struct lws *wsi, ws_auth_t *auth, cJSON *cmd)
 {
     const char *action = cjson_get_string(cmd, "action", "");
 
+/* Helper macro: deny and return if role requirement not met */
+#define REQUIRE_ROLE(min_role) \
+    do { \
+        if (!auth || !auth_require_role(auth, (min_role))) { \
+            const char *_d = "{\"type\":\"error\",\"reason\":\"unauthorized\"}"; \
+            ws_send(wsi, _d, strlen(_d)); \
+            return; \
+        } \
+    } while (0)
+
+/* Helper macro: validate seat_id is in the legal range [1..MAX_SEATS] */
+#define VALIDATE_SEAT_ID(sid) \
+    do { \
+        if ((sid) < 1 || (sid) > MAX_SEATS) { \
+            const char *_e = "{\"type\":\"error\",\"reason\":\"invalid_seat_id\"}"; \
+            ws_send(wsi, _e, strlen(_e)); \
+            return; \
+        } \
+    } while (0)
+
+/* Helper macro: validate phone number format (7-15 digits) */
+#define VALIDATE_PHONE(ph) \
+    do { \
+        if (!(ph) || strlen(ph) < 7 || strlen(ph) > 15) { \
+            const char *_e = "{\"type\":\"error\",\"reason\":\"invalid_phone\"}"; \
+            ws_send(wsi, _e, strlen(_e)); \
+            return; \
+        } \
+        for (size_t _i = 0; (ph)[_i]; _i++) { \
+            if (!((ph)[_i] >= '0' && (ph)[_i] <= '9') && (ph)[_i] != '+') { \
+                const char *_e = "{\"type\":\"error\",\"reason\":\"invalid_phone\"}"; \
+                ws_send(wsi, _e, strlen(_e)); \
+                return; \
+            } \
+        } \
+    } while (0)
+
     if (strcmp(action, "get_seats") == 0) {
-        /* Send current seat state to requesting client only */
+        /* Public — any connected client may request seat state */
         char *json = seats_state_to_json(
             pricing_get_fare(),
             pricing_get_route(),
@@ -359,8 +392,10 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
          * For now: transition seat to PAYING and broadcast the update.
          */
         int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        VALIDATE_SEAT_ID(seat_id);
         const char *phone = cjson_get_string(cmd, "phone",
                             cjson_get_string(cmd, "their_phone", ""));
+        VALIDATE_PHONE(phone);
         if (seat_id > 0) {
             seat_set_paying(seat_id, phone);
             seat_t *s = seat_get(seat_id);
@@ -390,7 +425,9 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
     } else if (strcmp(action, "pay_for_seat") == 0) {
         /* Third-party payment: payer_phone is different from seat occupant */
         int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        VALIDATE_SEAT_ID(seat_id);
         const char *payer = cjson_get_string(cmd, "payer_phone", "");
+        VALIDATE_PHONE(payer);
         if (seat_id > 0) {
             seat_set_paying(seat_id, payer);
             seat_t *s = seat_get(seat_id);
@@ -419,7 +456,9 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         }
 
     } else if (strcmp(action, "cash_paid") == 0) {
+        REQUIRE_ROLE(ROLE_CONDUCTOR);  /* Only conductor or owner can mark cash */
         int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        VALIDATE_SEAT_ID(seat_id);
         if (seat_id > 0) {
             seat_set_paid_cash(seat_id);
             seat_t *s = seat_get(seat_id);
@@ -446,7 +485,9 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         }
 
     } else if (strcmp(action, "reset_seat") == 0) {
+        REQUIRE_ROLE(ROLE_CONDUCTOR);  /* Only conductor or owner can reset */
         int seat_id = cjson_get_int(cmd, "seat_id", 0);
+        VALIDATE_SEAT_ID(seat_id);
         if (seat_id > 0) {
             seat_reset(seat_id);
             seat_t *s = seat_get(seat_id);
@@ -467,6 +508,7 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         }
 
     } else if (strcmp(action, "set_fare") == 0) {
+        REQUIRE_ROLE(ROLE_CONDUCTOR);  /* Only conductor or owner can set fare */
         const char *route = cjson_get_string(cmd, "route", NULL);
         int         fare  = cjson_get_int(cmd, "fare", 0);
         pricing_set(route, fare);
@@ -481,6 +523,7 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         }
 
     } else if (strcmp(action, "get_summary") == 0) {
+        REQUIRE_ROLE(ROLE_CONDUCTOR);  /* Revenue data: conductor and owner only */
         day_summary_t ds  = seat_get_day_summary();
         char *json = day_summary_to_json(&ds,
             g_lat, g_lon, g_speed, g_battery, g_gsm);
@@ -490,19 +533,42 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         }
 
     } else if (strcmp(action, "auth") == 0) {
-        /*
-         * PIN authentication.  For now we accept any PIN from a connected
-         * client and rely on the local JS check.  A production deployment
-         * would validate against a server-side PIN store.
-         * Respond with auth_ok to allow the client to enter the role.
-         */
         const char *role = cjson_get_string(cmd, "role", "");
         const char *pin  = cjson_get_string(cmd, "pin",  "");
-        printf("[WS] auth attempt: role=%s pin=****\n", role);
-        (void)pin; /* Audit log would go here */
+        printf("[WS] auth attempt: role=%s\n", role);
 
-        const char *resp = "{\"type\":\"auth_ok\"}";
-        ws_send(wsi, resp, strlen(resp));
+        if (!auth) {
+            /* Should never happen — per-session data always allocated */
+            const char *fail = "{\"type\":\"auth_fail\",\"reason\":\"internal\"}";
+            ws_send(wsi, fail, strlen(fail));
+        } else {
+            int lockout = auth_lockout_remaining(auth);
+            if (lockout > 0) {
+                /* Session locked — tell client how long to wait */
+                char buf[96];
+                snprintf(buf, sizeof(buf),
+                    "{\"type\":\"auth_fail\",\"reason\":\"locked\",\"wait\":%d}",
+                    lockout);
+                ws_send(wsi, buf, strlen(buf));
+            } else {
+                int result = auth_attempt(auth, role, pin);
+                if (result == 1) {
+                    char buf[80];
+                    snprintf(buf, sizeof(buf),
+                        "{\"type\":\"auth_ok\",\"role\":\"%s\"}",
+                        auth_role_str(auth->role));
+                    ws_send(wsi, buf, strlen(buf));
+                } else {
+                    char buf[96];
+                    int attempts_left = PIN_MAX_ATTEMPTS - auth->pin_attempts;
+                    if (attempts_left < 0) attempts_left = 0;
+                    snprintf(buf, sizeof(buf),
+                        "{\"type\":\"auth_fail\",\"reason\":\"wrong_pin\","
+                        "\"attempts_left\":%d}", attempts_left);
+                    ws_send(wsi, buf, strlen(buf));
+                }
+            }
+        }
 
     } else if (strcmp(action, "select_stop") == 0) {
         int stop_id = cjson_get_int(cmd, "stop_id", -1);
@@ -569,6 +635,7 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
         if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
 
     } else if (strcmp(action, "set_stops") == 0) {
+        REQUIRE_ROLE(ROLE_CONDUCTOR);  /* Conductor or owner can set route stops */
         /* Payload: { action:"set_stops", route:"CBD → Westlands", stops:[{id,name,lat,lon},...] } */
         const char *route_name = cjson_get_string(cmd, "route", "Unknown Route");
         cJSON *stops_arr = cJSON_GetObjectItem(cmd, "stops");
@@ -604,7 +671,8 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
 }
 
 /* Handle incoming WebSocket command from browser */
-static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
+static void handle_ws_command(struct lws *wsi, ws_auth_t *auth,
+                               const char *data, size_t len)
 {
     char *str = strndup(data, len);
     cJSON *cmd = cJSON_Parse(str);
@@ -615,10 +683,24 @@ static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
     if (!action) { cJSON_Delete(cmd); return; }
 
     if (strcmp(action, "subscribe") == 0) {
+        /* Only conductor or owner can add subscriptions */
+        if (auth && !auth_require_role(auth, ROLE_CONDUCTOR)) {
+            const char *deny = "{\"type\":\"error\",\"reason\":\"unauthorized\"}";
+            ws_send(wsi, deny, strlen(deny));
+            cJSON_Delete(cmd);
+            return;
+        }
         const char *topic = cjson_get_string(cmd, "topic", NULL);
         if (topic && strlen(topic) > 0 && strlen(topic) < MAX_TOPIC_LEN
             && sub_count < MAX_SUBSCRIPTIONS) {
-            /* Check not already subscribed */
+            /* Validate: only allow TransitTag topic namespace */
+            if (strncmp(topic, "/topic/transittag/", 18) != 0 &&
+                strncmp(topic, "/topic/transittag", 17) != 0) {
+                const char *deny = "{\"type\":\"error\",\"reason\":\"topic_not_allowed\"}";
+                ws_send(wsi, deny, strlen(deny));
+                cJSON_Delete(cmd);
+                return;
+            }
             int found = 0;
             for (int i = 0; i < sub_count; i++)
                 if (strcmp(active_subs[i], topic) == 0) { found = 1; break; }
@@ -632,13 +714,18 @@ static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
             broadcast_sub_list();
         }
     } else if (strcmp(action, "unsubscribe") == 0) {
+        if (auth && !auth_require_role(auth, ROLE_CONDUCTOR)) {
+            const char *deny = "{\"type\":\"error\",\"reason\":\"unauthorized\"}";
+            ws_send(wsi, deny, strlen(deny));
+            cJSON_Delete(cmd);
+            return;
+        }
         const char *topic = cjson_get_string(cmd, "topic", NULL);
         if (topic) {
             for (int i = 0; i < sub_count; i++) {
                 if (strcmp(active_subs[i], topic) == 0) {
                     mosquitto_unsubscribe(g_mosq, NULL, topic);
                     printf("[MQTT] Unsubscribed: %s\n", topic);
-                    /* Compact array */
                     memmove(&active_subs[i], &active_subs[i + 1],
                             (sub_count - i - 1) * MAX_TOPIC_LEN);
                     sub_count--;
@@ -650,8 +737,7 @@ static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
     } else if (strcmp(action, "list_subscriptions") == 0) {
         send_sub_list(wsi);
     } else {
-        /* Dispatch to PWA seat/fare/payment command handler */
-        handle_ws_pwa_command(wsi, cmd);
+        handle_ws_pwa_command(wsi, auth, cmd);
     }
 
     cJSON_Delete(cmd);
@@ -660,10 +746,11 @@ static void handle_ws_command(struct lws *wsi, const char *data, size_t len)
 static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
                        void *user, void *in, size_t len)
 {
-    (void)user;
+    ws_auth_t *auth = (ws_auth_t *)user;
 
     switch (reason) {
     case LWS_CALLBACK_ESTABLISHED:
+        if (auth) auth_init(auth);
         printf("[WS] Client connected (%d total)\n", ws_client_count + 1);
         if (ws_client_count < MAX_WS_CLIENTS) {
             ws_clients[ws_client_count] = wsi;
@@ -701,8 +788,13 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         break;
 
     case LWS_CALLBACK_RECEIVE:
-        if (in && len > 0)
-            handle_ws_command(wsi, (const char *)in, len);
+        if (in && len > 0) {
+            if (len > MAX_WS_MSG_BYTES) {
+                printf("[WS] Oversized message (%zu bytes) — closing\n", len);
+                return -1;  /* Force disconnect */
+            }
+            handle_ws_command(wsi, auth, (const char *)in, len);
+        }
         break;
 
     case LWS_CALLBACK_CLOSED:
@@ -776,12 +868,17 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
                     url_decode(dp + 5, decoded, sizeof(decoded));
                 }
             }
+            /* Basic input validation: reject oversized or obviously malicious data */
+            if (strlen(decoded) > 1024) {
+                lws_return_http_status(wsi, HTTP_STATUS_BAD_REQUEST, "Bad Request");
+                return -1;
+            }
             char *svg = NULL;
             if (decoded[0]) {
                 svg = qr_svg_generate(decoded, 4);
             }
             char tmppath[64];
-            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_qr_%d.svg", (int)getpid());
+            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_qr_%d.svg", (int)getpid());
             FILE *fsvg = fopen(tmppath, "w");
             if (fsvg) {
                 if (svg) fputs(svg, fsvg);
@@ -789,7 +886,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
                 fclose(fsvg);
             }
             free(svg);
-            int n = lws_serve_http_file(wsi, tmppath, "image/svg+xml", NULL, 0);
+            int n = lws_serve_http_file(wsi, tmppath, "image/svg+xml",
+                                        g_sec_headers, g_sec_headers_len);
             if (n < 0) return -1;
             break;
         }
@@ -836,13 +934,15 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
                       "</html>\n", fhtml);
                 fclose(fhtml);
             }
-            int n = lws_serve_http_file(wsi, tmppath, "text/html", NULL, 0);
+            int n = lws_serve_http_file(wsi, tmppath, "text/html",
+                                        g_sec_headers, g_sec_headers_len);
             if (n < 0) return -1;
             break;
         }
 
-        /* Path traversal protection */
-        if (strstr(uri, "..")) {
+        /* Path traversal and injection protection */
+        if (strstr(uri, "..") || strstr(uri, "//") ||
+            strstr(uri, "\r")  || strstr(uri, "\n")) {
             lws_return_http_status(wsi, HTTP_STATUS_FORBIDDEN, "Forbidden");
             return -1;
         }
@@ -880,7 +980,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
             cJSON_Delete(jr);
             /* Write JSON to a temp file and serve it */
             char tmppath[64];
-            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_fare_%d.json", (int)getpid());
+            snprintf(tmppath, sizeof(tmppath), TMP_DIR "/tt_fare_%d.json",
+                     (int)getpid());
             FILE *ftmp = fopen(tmppath, "w");
             if (ftmp) {
                 fputs(jrstr, ftmp);
@@ -888,7 +989,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
             }
             free(jrstr);
             int n = lws_serve_http_file(wsi, tmppath,
-                                        "application/json", NULL, 0);
+                                        "application/json",
+                                        g_sec_headers, g_sec_headers_len);
             if (n < 0) return -1;
             break;
         }
@@ -898,7 +1000,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
         printf("[HTTP] %s -> %s\n", uri, path);
 
         const char *mime = get_mimetype(path);
-        int n = lws_serve_http_file(wsi, path, mime, NULL, 0);
+        int n = lws_serve_http_file(wsi, path, mime,
+                                    g_sec_headers, g_sec_headers_len);
         if (n < 0) return -1;
         break;
     }
@@ -917,8 +1020,8 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 /* ── LWS setup ────────────────────────────────────────────────── */
 
 static struct lws_protocols protocols[] = {
-    { "http-only", callback_http, 0, 0 },
-    { "dashboard-ws", callback_ws, 0, 4096 },
+    { "http-only",    callback_http, 0,               0    },
+    { "dashboard-ws", callback_ws,  sizeof(ws_auth_t), 4096 },
     LWS_PROTOCOL_LIST_TERM
 };
 
@@ -1013,7 +1116,31 @@ int main(int argc, char *argv[])
     mosquitto_disconnect_callback_set(g_mosq, on_disconnect);
     mosquitto_message_callback_set(g_mosq, on_message);
 
-    int rc = mosquitto_connect(g_mosq, BROKER_HOST, BROKER_PORT, KEEP_ALIVE);
+    /*
+     * MQTT TLS — enabled when MQTT_CA_CERT env var is set.
+     * Set MQTT_CA_CERT=/path/to/ca.crt to enable TLS on port 8883.
+     * Optionally set MQTT_CLIENT_CERT and MQTT_CLIENT_KEY for mutual TLS.
+     */
+    int mqtt_port = BROKER_PORT;
+    {
+        const char *ca_cert     = getenv("MQTT_CA_CERT");
+        const char *client_cert = getenv("MQTT_CLIENT_CERT");
+        const char *client_key  = getenv("MQTT_CLIENT_KEY");
+        if (ca_cert) {
+            int tls_rc = mosquitto_tls_set(g_mosq,
+                ca_cert, NULL, client_cert, client_key, NULL);
+            if (tls_rc == MOSQ_ERR_SUCCESS) {
+                mqtt_port = BROKER_PORT_TLS;
+                printf("[MQTT] TLS enabled — connecting on port %d\n", mqtt_port);
+            } else {
+                fprintf(stderr, "[MQTT] TLS setup failed: %s — "
+                        "falling back to plain TCP\n",
+                        mosquitto_strerror(tls_rc));
+            }
+        }
+    }
+
+    int rc = mosquitto_connect(g_mosq, BROKER_HOST, mqtt_port, KEEP_ALIVE);
     if (rc != MOSQ_ERR_SUCCESS) {
         fprintf(stderr, "[MQTT] Connect error: %s\n", mosquitto_strerror(rc));
         mosquitto_destroy(g_mosq);

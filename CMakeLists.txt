@@ -10,6 +10,7 @@ find_library(CURL_LIB curl)
 add_executable(mqtt_dashboard
     src/main.c
     src/cJSON.c
+    src/auth.c
     src/seat_manager.c
     src/pricing.c
     src/qrcodegen.c
@@ -33,3 +34,16 @@ endif()
 target_compile_definitions(mqtt_dashboard PRIVATE
     WWW_DIR="${CMAKE_SOURCE_DIR}/www"
 )
+
+# Security: override PINs at build time so they never appear in source
+# Usage: cmake -B build -DCONDUCTOR_PIN=9876 -DOWNER_PIN=5432
+if(DEFINED CONDUCTOR_PIN)
+    target_compile_definitions(mqtt_dashboard PRIVATE
+        CONDUCTOR_PIN="${CONDUCTOR_PIN}")
+    message(STATUS "CONDUCTOR_PIN overridden at build time")
+endif()
+if(DEFINED OWNER_PIN)
+    target_compile_definitions(mqtt_dashboard PRIVATE
+        OWNER_PIN="${OWNER_PIN}")
+    message(STATUS "OWNER_PIN overridden at build time")
+endif()

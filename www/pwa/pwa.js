@@ -12,8 +12,7 @@
     var RECONNECT_MS   = 3000;
     var SPLASH_MS      = 1200;    /* Minimum splash duration */
     var TOAST_DURATION = 3500;    /* ms before toast auto-hides */
-    var PIN_CONDUCTOR  = "1234";  /* Default — real auth via WS response */
-    var PIN_OWNER      = "5678";
+    /* PINs are validated server-side only — no client-side constants */
 
     /* ── Application state ──────────────────────────────────────── */
 
@@ -164,7 +163,17 @@
             state.authed = true;
             enterRole(state.pinTarget);
         } else if (t === "auth_fail") {
-            showPinError();
+            if (msg.reason === "locked") {
+                var wait = msg.wait || 30;
+                showToast("Too many attempts — wait " + wait + "s", "error");
+                showPinError("Locked: wait " + wait + " seconds");
+            } else {
+                var left = msg.attempts_left;
+                var hint = (left !== undefined && left > 0)
+                    ? " (" + left + " attempt" + (left === 1 ? "" : "s") + " left)"
+                    : "";
+                showPinError("Incorrect PIN" + hint);
+            }
         } else if (t === "sub_list") {
             /* Dashboard compatibility — ignore in PWA */
         } else if (t === "heartbeat") {
@@ -437,40 +446,34 @@
             return;
         }
 
-        var expected = state.pinTarget === "conductor" ? PIN_CONDUCTOR : PIN_OWNER;
-
-        /* Try local check first (offline fallback); also send to server for audit */
+        /* PIN validated exclusively server-side — never accept locally */
         sendCommand({
             action: "auth",
             role:   state.pinTarget,
             pin:    state.pinBuffer
         });
 
-        /* Local validation as fallback when server hasn't responded */
-        if (state.pinBuffer === expected) {
-            state.authed = true;
-            enterRole(state.pinTarget);
-        } else {
-            showPinError();
-        }
-
         state.pinBuffer = "";
         renderPinDots();
+        /* UI feedback comes via auth_ok / auth_fail WS response */
     }
 
-    function showPinError() {
-        showEl("pin-error");
+    function showPinError(msg) {
+        var errEl = document.getElementById("pin-error");
+        if (errEl) {
+            errEl.textContent = msg || "Incorrect PIN";
+            showEl("pin-error");
+        }
         /* Shake animation on pad */
         var pad = document.querySelector(".pin-pad");
         if (pad) {
             pad.classList.remove("shake");
-            /* Force reflow to restart animation */
             void pad.offsetWidth;
             pad.classList.add("shake");
         }
         state.pinBuffer = "";
         renderPinDots();
-        showToast("Incorrect PIN", "error");
+        if (!msg) showToast("Incorrect PIN", "error");
     }
 
     /* ── Passenger view rendering ───────────────────────────────── */

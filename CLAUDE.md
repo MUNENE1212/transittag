@@ -39,14 +39,24 @@ The browser can also send commands back (subscribe/unsubscribe to MQTT topics) v
 
 **InfluxDB integration** is compile-time optional. CMake detects libcurl: if found, `src/influxdb.c` is compiled; otherwise `src/influxdb_stub.c` provides no-op stubs. InfluxDB is configured at runtime via environment variables, not command-line args.
 
-## Key Constants (in main.c)
+## Key Constants
 
-- `BROKER_HOST` / `BROKER_PORT` — MQTT broker address (`byte-iot.net:1883`)
-- `HTTP_PORT` — dashboard port (`8080`)
-- `MAX_WS_CLIENTS` — 32 concurrent browser connections
-- `MAX_LOG_MSGS` — 100-message ring buffer for backlog replay on new WS connections
-- `MAX_SUBSCRIPTIONS` — 16 active MQTT subscriptions
-- Default subscription: `/topic/transittag/#`
+All tuneable constants live in `src/config.h` (not `main.c`). Override at build time:
+```bash
+cmake -B build -DCONDUCTOR_PIN=9876 -DOWNER_PIN=5432 -DHTTP_PORT=8443
+```
+
+Key values: `BROKER_HOST/PORT`, `HTTP_PORT=8080`, `MAX_WS_CLIENTS=32`, `MAX_WS_MSG_BYTES=8192` (oversized frames are rejected), `MAX_LOG_MSGS=100`, `PIN_MAX_ATTEMPTS=5`, `PIN_LOCKOUT_SEC=30`
+
+## Security Architecture
+
+- **Auth module** (`src/auth.c/h`): per-WebSocket-connection state (`ws_auth_t`), stored as libwebsockets per-session data. PINs validated server-side with constant-time comparison. 5 failures → 30s lockout. Client-side PIN check **removed** — all auth is server-enforced.
+- **Role hierarchy**: `OWNER > CONDUCTOR > DRIVER = PASSENGER`. `REQUIRE_ROLE()` macro guards privileged actions. Passenger/Driver need no PIN; Conductor/Owner require PIN.
+- **Input validation**: `VALIDATE_SEAT_ID()` and `VALIDATE_PHONE()` macros check all WS command parameters before processing. Oversized WS frames (>8 KB) close the connection.
+- **HTTP security headers**: `X-Frame-Options: DENY`, `X-Content-Type-Options`, `CSP`, `Permissions-Policy` appended to all file responses via `g_sec_headers`.
+- **MQTT TLS**: set `MQTT_CA_CERT=/path/to/ca.crt` env var to enable TLS on port 8883. Mutual TLS via `MQTT_CLIENT_CERT`/`MQTT_CLIENT_KEY`.
+- **Path traversal**: URI checked for `..`, `//`, `\r`, `\n` before file serving.
+- **MQTT topic ACL**: subscribe action only allows `/topic/transittag/` prefix.
 
 ## MQTT Topic Structure
 
@@ -59,5 +69,5 @@ The browser can also send commands back (subscribe/unsubscribe to MQTT topics) v
 
 ## Dependencies
 
-System libraries (apt): `libmosquitto-dev`, `libwebsockets-dev`, `libcurl4-openssl-dev` (optional, for InfluxDB)
-Vendored: `cJSON` (`src/cJSON.c` / `src/cJSON.h`)
+System libraries (apt): `libmosquitto-dev`, `libwebsockets-dev`, `libcurl4-openssl-dev` (optional, for InfluxDB + Google Maps)
+Vendored: `cJSON` (`src/cJSON.c`), `qrcodegen` (`src/qrcodegen.c`) — MIT licensed
