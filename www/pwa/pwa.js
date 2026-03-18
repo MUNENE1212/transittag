@@ -36,6 +36,14 @@
         distanceM:     0
     };
 
+    /* ── Seat-from-URL helper ───────────────────────────────────── */
+
+    function getSeatFromUrl() {
+        var params = new URLSearchParams(window.location.search);
+        var s = parseInt(params.get("seat"), 10);
+        return (s > 0 && s <= 20) ? s : null;
+    }
+
     /* ── Seat model ─────────────────────────────────────────────── */
     /*
      * Each seat: { id, status, phone, receipt, fare, paidBy }
@@ -161,6 +169,13 @@
             handleFareQuote(msg);
         } else if (t === "fare_error") {
             handleFareError(msg);
+        } else if (t === "receipt_verify") {
+            hideCameraOverlay();
+            if (msg.result === "valid") {
+                showToast("\u2705 VERIFIED \u2014 Seat " + msg.seat_id + " \u00b7 KES " + msg.amount, "success");
+            } else {
+                showToast("\u274c INVALID receipt", "error");
+            }
         } else {
             /* Legacy MQTT envelope: { topic, payload, receivedAt } */
             if (msg.topic) {
@@ -321,6 +336,16 @@
             hideCard("pax-waiting-card");
             hideCard("pax-receipt-card");
             hideCard("pax-no-seat");
+
+            /* If ?seat=N is in URL, pre-select that seat */
+            var urlSeat = getSeatFromUrl();
+            if (urlSeat) {
+                state.mySeatId = urlSeat;
+                /* Show the hero with the seat number immediately */
+                updateHero({ id: urlSeat, status: "seated" });
+                hideCard("pax-no-seat");
+            }
+
             /* Request current seats and route stops */
             sendCommand({ action: "get_seats" });
             sendCommand({ action: "get_stops" });
@@ -601,6 +626,13 @@
         if (phoneEl) phoneEl.textContent = data.payer_phone
                                            ? formatPhoneDisplay(data.payer_phone)
                                            : "\u2014";
+
+        var qrImg = document.getElementById("receipt-qr");
+        if (qrImg && data.receipt) {
+            qrImg.src = "/api/qr?data=" + encodeURIComponent(data.receipt);
+            qrImg.removeAttribute("hidden");
+        }
+
         showCard("pax-receipt-card");
     }
 
@@ -785,6 +817,72 @@
         hideEl("action-sheet");
         hideEl("overlay");
         state.activeSeatId = null;
+    }
+
+    /* ── Conductor: QR camera scan ──────────────────────────────── */
+
+    var cameraStream    = null;
+    var cameraScanTimer = null;
+
+    function startCameraScan() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast("Camera not supported on this device", "error");
+            return;
+        }
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+            .then(function (stream) {
+                cameraStream = stream;
+                var video = document.getElementById("camera-video");
+                if (video) {
+                    video.srcObject = stream;
+                }
+                showEl("camera-overlay");
+                cameraScanTimer = setInterval(scanCameraFrame, 100);
+            })
+            .catch(function (err) {
+                console.warn("[QR] Camera access denied:", err);
+                showToast("Camera access denied", "error");
+            });
+    }
+
+    function scanCameraFrame() {
+        var video  = document.getElementById("camera-video");
+        var canvas = document.getElementById("camera-canvas");
+        if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if (typeof jsQR === "undefined") return;
+
+        var code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code && code.data) {
+            stopCameraStream();
+            hideEl("camera-overlay");
+            showToast("Verifying...", "info");
+            sendCommand({ action: "verify_receipt", receipt: code.data });
+        }
+    }
+
+    function stopCameraStream() {
+        if (cameraScanTimer) {
+            clearInterval(cameraScanTimer);
+            cameraScanTimer = null;
+        }
+        if (cameraStream) {
+            cameraStream.getTracks().forEach(function (t) { t.stop(); });
+            cameraStream = null;
+        }
+        var video = document.getElementById("camera-video");
+        if (video) video.srcObject = null;
+    }
+
+    function hideCameraOverlay() {
+        stopCameraStream();
+        hideEl("camera-overlay");
     }
 
     /* ── Owner dashboard ────────────────────────────────────────── */
@@ -1066,6 +1164,22 @@
         /* Overlay click to close action sheet */
         var overlay = document.getElementById("overlay");
         if (overlay) overlay.addEventListener("click", hideActionSheet);
+
+        /* Conductor: Scan QR button */
+        var scanQrBtn = document.getElementById("btn-scan-qr");
+        if (scanQrBtn) {
+            scanQrBtn.addEventListener("click", function () {
+                startCameraScan();
+            });
+        }
+
+        /* Camera overlay: Cancel button */
+        var cameraCancelBtn = document.getElementById("btn-camera-cancel");
+        if (cameraCancelBtn) {
+            cameraCancelBtn.addEventListener("click", function () {
+                hideCameraOverlay();
+            });
+        }
     }
 
     function bindPassengerPayButtons() {
@@ -1194,10 +1308,18 @@
         /* Start WebSocket early */
         connect();
 
-        /* Show landing after splash */
-        setTimeout(function () {
-            showScreen("s-landing");
-        }, SPLASH_MS);
+        /* If ?seat=N is in URL, auto-select passenger role after splash */
+        var urlSeat = getSeatFromUrl();
+        if (urlSeat) {
+            setTimeout(function () {
+                selectRole("passenger");
+            }, SPLASH_MS);
+        } else {
+            /* Show landing after splash */
+            setTimeout(function () {
+                showScreen("s-landing");
+            }, SPLASH_MS);
+        }
     }
 
     /* Wire up on DOM ready */

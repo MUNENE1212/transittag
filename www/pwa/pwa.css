@@ -1438,3 +1438,31 @@ input {
 .stop-item .stop-fare { color: var(--yellow); font-weight: 700; font-size: 16px; }
 .stop-loading { color: var(--muted); text-align: center; padding: 20px; }
 .fare-distance { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+/* ── Receipt QR ──────────────────────────────────────────────────── */
+.receipt-qr { display: block; width: 160px; height: 160px; margin: 16px auto 0; border-radius: 8px; }
+
+/* ── Camera overlay ──────────────────────────────────────────────── */
+.camera-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; z-index: 1000;
+}
+#camera-video { width: 100%; max-width: 400px; border-radius: 8px; }
+.scan-frame {
+  position: absolute; width: 220px; height: 220px;
+  border: 3px solid var(--yellow); border-radius: 12px;
+  box-shadow: 0 0 0 4000px rgba(0,0,0,0.5);
+}
+.camera-cancel-btn {
+  margin-top: 24px; padding: 12px 32px; background: var(--card);
+  color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 16px; cursor: pointer;
+}
+
+/* ── Scan QR button ──────────────────────────────────────────────── */
+.btn-scan-qr {
+  background: var(--blue); color: white; border: none; border-radius: 8px;
+  padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  margin: 0 0 12px 0; width: 100%;
+}

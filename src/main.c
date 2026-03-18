@@ -21,6 +21,7 @@
 #include "seat_manager.h"
 #include "pricing.h"
 #include "routes.h"
+#include "qr_svg.h"
 
 /* ── Configuration ────────────────────────────────────────────── */
 
@@ -535,6 +536,37 @@ static void handle_ws_pwa_command(struct lws *wsi, cJSON *cmd)
     } else if (strcmp(action, "get_stops") == 0) {
         char *sj = routes_stops_to_json();
         if (sj) { ws_send(wsi, sj, strlen(sj)); free(sj); }
+
+    } else if (strcmp(action, "verify_receipt") == 0) {
+        const char *receipt = cjson_get_string(cmd, "receipt", "");
+        /* Search all seats for matching receipt */
+        int found_seat = -1;
+        int sc = 0;
+        seat_t *all = seat_get_all(&sc);
+        for (int i = 0; i < sc; i++) {
+            if (strcmp(all[i].receipt, receipt) == 0) {
+                found_seat = all[i].id;
+                break;
+            }
+        }
+        cJSON *vr = cJSON_CreateObject();
+        cJSON_AddStringToObject(vr, "type", "receipt_verify");
+        cJSON_AddStringToObject(vr, "receipt", receipt);
+        if (found_seat > 0) {
+            cJSON_AddStringToObject(vr, "result", "valid");
+            cJSON_AddNumberToObject(vr, "seat_id", found_seat);
+            seat_t *s = seat_get(found_seat);
+            if (s) {
+                cJSON_AddNumberToObject(vr, "amount", s->fare_kes);
+                cJSON_AddStringToObject(vr, "method", s->payment_method);
+            }
+        } else {
+            cJSON_AddStringToObject(vr, "result", "invalid");
+        }
+        char *vjs = cJSON_PrintUnformatted(vr);
+        ws_send(wsi, vjs, strlen(vjs));   /* only to scanning conductor */
+        free(vjs);
+        cJSON_Delete(vr);
     }
 }
 
@@ -653,6 +685,22 @@ static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 
 /* ── HTTP file serving ────────────────────────────────────────── */
 
+static void url_decode(const char *src, char *dst, size_t dstlen) {
+    size_t di = 0;
+    for (size_t i = 0; src[i] && di + 1 < dstlen; i++) {
+        if (src[i] == '%' && src[i+1] && src[i+2]) {
+            char hex[3] = { src[i+1], src[i+2], 0 };
+            dst[di++] = (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else if (src[i] == '+') {
+            dst[di++] = ' ';
+        } else {
+            dst[di++] = src[i];
+        }
+    }
+    dst[di] = '\0';
+}
+
 static const char *get_mimetype(const char *path)
 {
     size_t n = strlen(path);
@@ -678,6 +726,81 @@ static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
 
         if (!uri || strcmp(uri, "/") == 0)
             uri = "/index.html";
+
+        /* /api/qr?data=ENCODED_URL — returns SVG for any data string */
+        if (strncmp(uri, "/api/qr", 7) == 0) {
+            const char *q = strchr(uri, '?');
+            char decoded[2048] = {0};
+            if (q) {
+                const char *dp = strstr(q, "data=");
+                if (dp) {
+                    url_decode(dp + 5, decoded, sizeof(decoded));
+                }
+            }
+            char *svg = NULL;
+            if (decoded[0]) {
+                svg = qr_svg_generate(decoded, 4);
+            }
+            char tmppath[64];
+            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_qr_%d.svg", (int)getpid());
+            FILE *fsvg = fopen(tmppath, "w");
+            if (fsvg) {
+                if (svg) fputs(svg, fsvg);
+                else fputs("<svg xmlns=\"http://www.w3.org/2000/svg\"/>", fsvg);
+                fclose(fsvg);
+            }
+            free(svg);
+            int n = lws_serve_http_file(wsi, tmppath, "image/svg+xml", NULL, 0);
+            if (n < 0) return -1;
+            break;
+        }
+
+        /* /print-qrs — printable seat label page with QR codes for all 14 seats */
+        if (strncmp(uri, "/print-qrs", 10) == 0) {
+            char tmppath[64];
+            snprintf(tmppath, sizeof(tmppath), "/tmp/tt_print_%d.html", (int)getpid());
+            FILE *fhtml = fopen(tmppath, "w");
+            if (fhtml) {
+                fputs("<!DOCTYPE html>\n"
+                      "<html>\n"
+                      "<head>\n"
+                      "<title>TransitTag \xe2\x80\x94 Seat QR Codes</title>\n"
+                      "<style>\n"
+                      "  body { font-family: sans-serif; background: #fff; margin: 0; padding: 16px; }\n"
+                      "  h1 { font-size: 18px; margin-bottom: 16px; text-align: center; }\n"
+                      "  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }\n"
+                      "  .label { border: 2px solid #000; border-radius: 8px; padding: 12px;\n"
+                      "           text-align: center; page-break-inside: avoid; }\n"
+                      "  .seat-num { font-size: 28px; font-weight: bold; margin-bottom: 8px; }\n"
+                      "  .qr-img { width: 140px; height: 140px; display: block; margin: 0 auto; }\n"
+                      "  .scan-text { font-size: 11px; color: #444; margin-top: 8px; }\n"
+                      "  @media print { body { padding: 0; } }\n"
+                      "</style>\n"
+                      "</head>\n"
+                      "<body>\n"
+                      "<h1>TransitTag \xe2\x80\x94 Seat QR Codes</h1>\n"
+                      "<div class=\"grid\" id=\"grid\"></div>\n"
+                      "<script>\n"
+                      "var base = location.origin + '/pwa/?seat=';\n"
+                      "var grid = document.getElementById('grid');\n"
+                      "for (var i = 1; i <= 14; i++) {\n"
+                      "  var url = base + i;\n"
+                      "  var d = document.createElement('div');\n"
+                      "  d.className = 'label';\n"
+                      "  d.innerHTML = '<div class=\"seat-num\">SEAT ' + i + '</div>'\n"
+                      "    + '<img class=\"qr-img\" src=\"/api/qr?data=' + encodeURIComponent(url) + '\" alt=\"QR\">'\n"
+                      "    + '<div class=\"scan-text\">Scan to pay &bull; TransitTag</div>';\n"
+                      "  grid.appendChild(d);\n"
+                      "}\n"
+                      "</script>\n"
+                      "</body>\n"
+                      "</html>\n", fhtml);
+                fclose(fhtml);
+            }
+            int n = lws_serve_http_file(wsi, tmppath, "text/html", NULL, 0);
+            if (n < 0) return -1;
+            break;
+        }
 
         /* Path traversal protection */
         if (strstr(uri, "..")) {

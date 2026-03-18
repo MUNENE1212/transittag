@@ -200,6 +200,7 @@
                 <span class="receipt-label">Phone</span>
                 <span id="rcpt-phone" class="receipt-val">—</span>
             </div>
+            <img id="receipt-qr" class="receipt-qr" hidden alt="Receipt QR">
         </div>
 
         <!-- No seat placeholder -->
@@ -213,6 +214,9 @@
 
     <!-- ── SCREEN: Conductor ─────────────────────────────────────── -->
     <div id="s-conductor" class="screen" hidden>
+
+        <!-- Scan QR button -->
+        <button id="btn-scan-qr" class="btn-scan-qr">&#128247; Scan QR</button>
 
         <!-- Summary bar -->
         <div id="cond-summary" class="summary-bar">
@@ -433,9 +437,18 @@
         <button id="as-btn-close" class="btn-close-sheet">Close</button>
     </div>
 
+    <!-- ── Camera overlay (conductor QR scan) ───────────────────── -->
+    <div id="camera-overlay" class="camera-overlay" hidden>
+      <video id="camera-video" autoplay playsinline muted></video>
+      <canvas id="camera-canvas" hidden></canvas>
+      <div class="scan-frame"></div>
+      <button id="btn-camera-cancel" class="camera-cancel-btn">Cancel</button>
+    </div>
+
     <!-- ── Toast notification ────────────────────────────────────── -->
     <div id="toast" class="toast" hidden></div>
 
+    <script src="/js/jsqr.js"></script>
     <script src="/pwa/pwa.js"></script>
 </body>
 </html>
